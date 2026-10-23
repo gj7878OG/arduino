@@ -34,6 +34,15 @@ from config import (
 
 log = logging.getLogger('agv.camera')
 
+# Reconnect policy. A dropped USB camera leaves the existing
+# cv2.VideoCapture handle returning False forever — retrying read() on that
+# dead handle can never recover, so the handle itself has to be rebuilt. The
+# counter keeps a momentary glitch (a single bad read, an ISP hiccup) from
+# tearing down a working pipeline.
+REOPEN_AFTER_FAILS = 15
+REOPEN_BACKOFF_S = 2.0
+REOPEN_WARN_EVERY_S = 15.0
+
 
 @dataclass
 class CameraReport:
@@ -96,37 +105,85 @@ class Camera:
         self._seq = 0
         self._connected = False
         self._last_error: Optional[str] = None
+        self._next_reopen = 0.0
+        self._last_reopen_warn = 0.0
 
     # ── lifecycle ─────────────────────────────────────────────────────
+    def _acquire(self) -> tuple[bool, str]:
+        """Build a fresh capture handle into ``self._cap``.
+
+        Returns ``(ok, reason)``; ``reason`` is empty on success. Used both
+        by :meth:`open` and by the reader's reconnect path so the two can
+        never drift apart.
+        """
+        if not self.pipeline:
+            return False, f'unknown backend {self.backend!r}'
+        try:
+            cap = cv2.VideoCapture(self.pipeline, cv2.CAP_GSTREAMER)
+        except Exception as e:
+            return False, f'{type(e).__name__}: {e}'
+        if not cap.isOpened():
+            cap.release()
+            return False, 'cv2.VideoCapture.isOpened() returned False'
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            cap.release()
+            return False, 'pipeline opened but produced no frames'
+        self._cap = cap
+        return True, ''
+
+    def _reacquire(self) -> bool:
+        """Drop the current handle and rebuild the pipeline.
+
+        Called from the reader thread whenever the capture goes away for
+        good. Failures are throttled in the log because a genuinely absent
+        camera retries forever.
+        """
+        cap, self._cap = self._cap, None
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        ok, reason = self._acquire()
+        if ok:
+            self._last_error = ''
+            log.info('[Camera] pipeline reacquired')
+            return True
+        self._last_error = reason
+        now = time.monotonic()
+        if now - self._last_reopen_warn >= REOPEN_WARN_EVERY_S:
+            self._last_reopen_warn = now
+            log.warning('[Camera] reconnect failed: %s (retrying every %.0fs)',
+                        reason, REOPEN_BACKOFF_S)
+        return False
+
     def open(self) -> CameraReport:
         t0 = time.monotonic()
         if self.backend == 'fake':
             self._fake = FakeCamera()
-            self._connected = True
             self._start_reader()
             return CameraReport(
                 backend='fake', pipeline=None, opened=True, frame_ok=True,
                 latency_ms=round((time.monotonic() - t0) * 1000, 1),
             )
-        if not self.pipeline:
-            return CameraReport(self.backend, None, False, False,
-                                f'unknown backend {self.backend!r}')
-        try:
-            cap = cv2.VideoCapture(self.pipeline, cv2.CAP_GSTREAMER)
-        except Exception as e:
-            return CameraReport(self.backend, self.pipeline, False, False,
-                                f'{type(e).__name__}: {e}')
-        if not cap.isOpened():
-            cap.release()
-            return CameraReport(self.backend, self.pipeline, False, False,
-                                'cv2.VideoCapture.isOpened() returned False')
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            cap.release()
-            return CameraReport(self.backend, self.pipeline, True, False,
-                                'pipeline opened but produced no frames')
-        self._cap = cap
-        self._connected = True
+        ok, reason = self._acquire()
+        if not ok:
+            self._last_error = reason
+            # Start the reader anyway: it owns the retry loop, so a camera
+            # that is merely not plugged in yet (or still booting) comes
+            # up on its own instead of needing the whole AGV restarted.
+            self._start_reader()
+            return CameraReport(
+                self.backend, self.pipeline,
+                # The distinction the probe reports: the pipeline itself
+                # opened, it just had nothing to show.
+                reason != 'pipeline opened but produced no frames',
+                False, reason,
+            )
+        # `connected` is not set here: the reader flips it once a frame is
+        # genuinely published, so callers that read `connected` and
+        # `latest()` together never see "live" with an empty buffer.
         self._start_reader()
         return CameraReport(
             backend=self.backend, pipeline=self.pipeline, opened=True, frame_ok=True,
@@ -136,7 +193,9 @@ class Camera:
     def release(self) -> None:
         self._running = False
         if self._thread:
-            self._thread.join(timeout=2)
+            # The reader may be mid-backoff (up to 2s), so allow a little
+            # more than that or the thread outlives release().
+            self._thread.join(timeout=3)
             self._thread = None
         if self._cap:
             self._cap.release()
@@ -172,30 +231,49 @@ class Camera:
 
     def _reader(self) -> None:
         backoff = 0.05
+        fails = 0
         while self._running:
             if self._fake is not None:
                 ret, frame = self._fake.read()
-            elif self._cap is not None:
+            elif self._cap is None:
+                # Never opened, or the handle was dropped. Rebuild the
+                # pipeline; this is the branch that makes a camera that is
+                # absent at startup come up on its own once it is plugged
+                # in or finishes booting.
+                if time.monotonic() >= self._next_reopen:
+                    self._next_reopen = time.monotonic() + REOPEN_BACKOFF_S
+                    self._reacquire()
+                time.sleep(0.2)
+                continue
+            else:
                 try:
                     ret, frame = self._cap.read()
                 except cv2.error as exc:
+                    ret, frame = False, None
                     self._last_error = f'cv2.error during read: {exc}'
                     log.error('[Camera] %s', self._last_error)
-                    self._connected = False
-                    time.sleep(backoff); backoff = min(backoff * 2, 2.0); continue
                 except Exception as exc:
+                    ret, frame = False, None
                     self._last_error = f'{type(exc).__name__}: {exc}'
                     log.error('[Camera] %s', self._last_error)
-                    self._connected = False
-                    time.sleep(backoff); backoff = min(backoff * 2, 2.0); continue
-            else:
-                return
+
             if not ret or frame is None:
                 self._connected = False
                 self._last_error = self._last_error or 'read() returned False'
-                time.sleep(backoff); backoff = min(backoff * 2, 2.0); continue
+                fails += 1
+                # Only rebuild once the handle is consistently dead — a
+                # single dropped frame is just backoff.
+                if fails >= REOPEN_AFTER_FAILS and time.monotonic() >= self._next_reopen:
+                    fails = 0
+                    self._next_reopen = time.monotonic() + REOPEN_BACKOFF_S
+                    log.warning('[Camera] no frames for %d reads; reconnecting',
+                                REOPEN_AFTER_FAILS)
+                    self._reacquire()
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 2.0)
+                continue
+            fails = 0
             backoff = 0.05
-            self._connected = True
             self._seq += 1
             # Apply configured software flip. CAMERA_FLIP=0 is a no-op
             # so the default behaviour is unchanged. flipCode -1 is
@@ -217,6 +295,12 @@ class Camera:
             with self._lock:
                 self._latest = FrameInfo(image=frame, monotonic=time.monotonic(),
                                          sequence=self._seq)
+            # Only claim the camera is live once the frame is actually
+            # published: consumers read `connected` and `latest()` together,
+            # and flipping it first would advertise a live camera whose
+            # buffer is still empty (the window right after a reconnect).
+            self._connected = True
+            self._last_error = ''
 
 
 # Convenience functions kept for backward compatibility with code that

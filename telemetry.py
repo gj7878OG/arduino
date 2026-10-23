@@ -81,8 +81,16 @@ class TelemetryState:
     lidar_connected: bool = False
     lidar_error: Optional[str] = None
     lidar_distance_mm: float = 0.0
-    # Rotating-LiDAR obstacle safety (lidar_safety.py). None means "no
+    # Rotating-LiDAR obstacle safety (lidar/safety.py). None means "no
     # reading" — the dashboard shows "—" rather than a misleading 0.0.
+    #
+    # NOTE the collision above: `lidar_status` / `lidar_connected` /
+    # `lidar_error` / `lidar_distance_mm` are the *camera* obstacle
+    # detector (agv_drive_arduino binds them to OBST_ENABLED and vis.obstacle),
+    # not this sensor. `lidar_sensor_connected` below is the only field that
+    # reports whether the rotating LiDAR is actually producing a healthy
+    # snapshot — use it for the LiDAR's own up/down indicator.
+    lidar_sensor_connected: bool = False         # rotating LiDAR healthy
     lidar_min_front_m: Optional[float] = None    # nearest obstacle ahead
     lidar_sector_mins: Optional[list] = None     # per-sector minimum, metres
     lidar_age_ms: Optional[int] = None           # age of the newest sample

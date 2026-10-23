@@ -39,10 +39,23 @@ MOTOR_SPAN_MIN_DEG = 60.0   # below this span over the window → stalled
 POINTS_WINDOW_S = 2.0
 POINTS_MAX = 3000
 
+# Reconnect policy. A read *exception* already triggers a reopen, but a head
+# that is still spinning up — or one whose motor has stalled — keeps the USB
+# handle perfectly healthy while producing no nodes, so no exception is ever
+# raised and the sensor just sits there reporting `stale`. Rebuilding re-issues
+# the SCAN command, which is what restarts a stalled head.
+#
+# Well above LIDAR_STALE_MS (200 ms) so ordinary gaps between sweeps never
+# trip it, and rate-limited by its own backoff so a sensor that is genuinely
+# gone costs one reopen attempt per interval rather than one per scan cycle.
+REOPEN_QUIET_S = 5.0
+REOPEN_BACKOFF_S = 10.0
+
 __all__ = [
     'SCAN_HEADER_LEN', 'SCAN_HEADER', 'NODE_LEN',
     'ANGLE_SCALE', 'DIST_Q2_TO_M',
     'STUCK_SPREAD_M', 'STUCK_HOLD_S', 'STUCK_MIN_SAMPLES',
     'NOISY_FRACTION', 'MOTOR_SPAN_MIN_DEG',
     'POINTS_WINDOW_S', 'POINTS_MAX',
+    'REOPEN_QUIET_S', 'REOPEN_BACKOFF_S',
 ]

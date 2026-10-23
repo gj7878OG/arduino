@@ -1529,8 +1529,12 @@
       // flag. Colour follows the three-zone rule used everywhere else:
       // ESTOP red, SLOW amber, CLEAR green, OFF/DOWN never look safe.
       let lidTxt, lidCls;
+      // `lidar_connected` is the *camera* obstacle detector's enable flag,
+      // not this sensor. `lidar_sensor_connected` is the rotating LiDAR's
+      // own health verdict, the same one the control loop acts on.
+      const lidUp = d.lidar_sensor_connected ?? d.lidar_connected;
       if (d.lidar_enabled === false) { lidTxt = 'OFF'; lidCls = 'warn'; }
-      else if (!d.lidar_connected) { lidTxt = 'DOWN'; lidCls = 'bad'; }
+      else if (!lidUp) { lidTxt = 'DOWN'; lidCls = 'bad'; }
       else {
         const act = d.lidar_action || 'CLEAR';
         lidCls = act === 'ESTOP' ? 'bad' : act === 'SLOW' ? 'warn' : 'good';

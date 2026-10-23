@@ -47,8 +47,8 @@ from config import (
 )
 from ._constants import (
     MOTOR_SPAN_MIN_DEG, NOISY_FRACTION, NODE_LEN, POINTS_MAX,
-    POINTS_WINDOW_S, SCAN_HEADER, SCAN_HEADER_LEN, STUCK_HOLD_S,
-    STUCK_MIN_SAMPLES, STUCK_SPREAD_M,
+    POINTS_WINDOW_S, REOPEN_BACKOFF_S, REOPEN_QUIET_S, SCAN_HEADER,
+    SCAN_HEADER_LEN, STUCK_HOLD_S, STUCK_MIN_SAMPLES, STUCK_SPREAD_M,
 )
 from .parser import parse_nodes
 
@@ -274,7 +274,21 @@ class LidarSafety:
         would destroy the 5-byte stride).
         """
         backoff = 0.5
+        last_data = time.monotonic()
+        next_reopen = 0.0
         while not self._closing.is_set():
+            # A healthy handle that has gone quiet for REOPEN_QUIET_S is the
+            # stall case no exception can report: rebuild the port, which
+            # also re-issues SCAN and can restart a stopped motor.
+            if (time.monotonic() - last_data > REOPEN_QUIET_S
+                    and time.monotonic() >= next_reopen):
+                next_reopen = time.monotonic() + REOPEN_BACKOFF_S
+                log.warning('LiDAR silent for %.0fs; reopening', REOPEN_QUIET_S)
+                with self._lock:
+                    self._serial = None
+                last_data = time.monotonic()
+                continue
+
             ser = self._serial
             if ser is None:
                 if not self._reopen_with_backoff():
@@ -353,6 +367,7 @@ class LidarSafety:
                 # consume the 5 bytes from the front of the buffer
                 del self._node_buf[:NODE_LEN]
             if added:
+                last_data = time.monotonic()
                 self._trim_locked()
 
     def _trim_locked(self) -> None:

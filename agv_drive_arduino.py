@@ -514,6 +514,10 @@ class AGV:
             # Rotating-LiDAR safety. The snapshot was taken by
             # _lidar_override at 50 Hz this tick; only the zones (which
             # change rarely, from the dashboard) are re-read here.
+            # `lidar_connected` above is the camera obstacle detector's
+            # enable flag, so the sensor's own health needs its own field —
+            # without it the UI reports "connected" for an unplugged LiDAR.
+            lidar_sensor_connected=bool(self._lid.ok),
             lidar_min_front_m=(None if self._lid.min_front_m == float('inf')
                                else round(self._lid.min_front_m, 3)),
             lidar_sector_mins=[(None if v == float('inf') else round(v, 3))
