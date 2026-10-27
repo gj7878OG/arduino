@@ -35,16 +35,25 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, make_response, render_template, request, send_file
 
 from config import (
-    CAM_PREVIEW_DEV, DASHBOARD_HOST, DASHBOARD_HTTP_PORT, DASHBOARD_WS_PORT,
+    CAM_FACE_DB, CAM_FACE_THUMBS, CAM_PREVIEW_DEV, CAM_PROFILES, CAM_SETTINGS_FILE,
+    DASHBOARD_HOST, DASHBOARD_HTTP_PORT, DASHBOARD_WS_PORT,
     TELEMETRY_DIR,
 )
 from control_state import (
-    LIDAR_CLAMPS, LIDAR_LIMITS, LIDAR_SLOW_GAP_M, MANUAL_STALE_S, ControlReader,
+    LIDAR_CLAMPS, LIDAR_LIMITS, LIDAR_SLOW_GAP_M, MANUAL_STALE_S,
+    TURN_FLOOR_BASE_MAX, TURN_FLOOR_BASE_MIN, TURN_FLOOR_BASE_DEFAULT,
+    LOOKAHEAD_MAX_M, LOOKAHEAD_MIN_M, STEER_CLAMPS,
+    ControlReader,
     clamp_speed, read_state, write_state,
 )
+from config import TURN_FLOOR, TURN_FLOOR_FULL_ERR_M
 import recording_io
 from config import REC_DEFAULT_RATE_HZ, REC_DIR, SPEED_MAX_PCT, SPEED_MIN_PCT
 from config import LIVE_FRAMES_DIR
+from cam.analytics import GREETER_KEYS as CAM_GREETER_KEYS, LIMITS as CAM_LIMITS, CamAnalytics
+from cam.facefile import FacesFilePublisher
+from cam.faces import FaceStore, valid_name as _cam_valid_name
+from cam.profiles import ProfileStore, public_view as _cam_profile_view
 from cam.publisher import CamPublisher
 
 log = logging.getLogger('agv.web')
@@ -123,12 +132,31 @@ def _detect_preview_cam() -> str:
 CAM_DEV = _detect_preview_cam()
 CAM_PUBLISHER = CamPublisher(device=CAM_DEV, width=640, height=480, target_fps=12)
 CAM_PUBLISHER.start()
+# Face/object analytics reads frames from CAM_PUBLISHER (uvcvideo allows one
+# opener), loads its models lazily, and idles until the Camera tab is watched.
+# The voice process is separate and reads files, so the rover's view of the
+# camera is cam_faces.json (written here) and it can wake the camera with
+# cam_watch.json (written there). Neither side imports the other.
+CAM_FACES_PATH = Path(TELEMETRY_DIR) / 'cam_faces.json'
+CAM_WATCH_PATH = Path(TELEMETRY_DIR) / 'cam_watch.json'
+CAM_PROFILES_STORE = ProfileStore(CAM_PROFILES)
+CAM_ANALYTICS = CamAnalytics(
+    CAM_PUBLISHER,
+    store=FaceStore(CAM_FACE_DB, CAM_FACE_THUMBS),
+    settings_path=CAM_SETTINGS_FILE,
+    profiles=CAM_PROFILES_STORE,
+    watch_path=str(CAM_WATCH_PATH),
+).start()
+CAM_FACES_FILE = FacesFilePublisher(CAM_ANALYTICS, CAM_PUBLISHER, str(CAM_FACES_PATH)).start()
 
 # ─────────────────────────────────────────────────────────────────
 # HTTP layer (Flask)
 # ─────────────────────────────────────────────────────────────────
 
-flask_app = Flask('agv-dashboard')
+# `Flask('agv-dashboard')` has no module to locate: it falls back to the working
+# directory and every template 500s unless the process happens to be started from
+# the repo root. Pin the root to this file, like PASSWORD_FILE below.
+flask_app = Flask('agv-dashboard', root_path=str(Path(__file__).resolve().parent))
 
 
 @flask_app.context_processor
@@ -183,6 +211,7 @@ def _read_status() -> dict:
         'last_error': None,
         'enabled': False,
         'max_speed_pct': 0,
+        'turn_floor_base': TURN_FLOOR_BASE_DEFAULT,
         'mode': 'auto',
         'obstacle_enforced': True,
         'track_state': 'NO_LINE',
@@ -203,11 +232,34 @@ def _read_status() -> dict:
     try:
         with STATUS_PATH.open('r', encoding='utf-8') as fh:
             payload = json.load(fh)
-        for key, default in fallback.items():
-            payload.setdefault(key, default)
-        return payload
+        return _fill_control_defaults(payload, fallback)
     except (OSError, ValueError):
-        return fallback
+        return _fill_control_defaults(dict(fallback), fallback)
+
+
+def _fill_control_defaults(payload: dict, fallback: dict) -> dict:
+    """Fill in the fields only the AGV publishes, from the control file.
+
+    ``closed_loop_wanted`` is the wheel-control tick box. While the AGV runs
+    it reports the choice itself; with the dashboard alone there is nothing to
+    report it, and the box would fall back to "true" and re-tick itself — so
+    read the saved choice out of control.json instead.
+
+    ``record_auto`` is the same case for a different reason: the AGV has no
+    opinion about it (nothing on its side changes), so it is never in
+    status.json and must come from control.json or the switch would untick
+    itself the moment the AGV next published.
+    """
+    for key, default in fallback.items():
+        payload.setdefault(key, default)
+    ctl = None
+    if payload.get('closed_loop_wanted') is None or payload.get('record_auto') is None:
+        ctl = read_state()
+    if payload.get('closed_loop_wanted') is None:
+        payload['closed_loop_wanted'] = bool(ctl['closed_loop'])
+    if payload.get('record_auto') is None:
+        payload['record_auto'] = bool(ctl['record_auto'])
+    return payload
 
 
 @flask_app.route('/points.json', methods=['GET'])
@@ -226,6 +278,315 @@ def points_json():
     resp.headers['Content-Type'] = 'application/json'
     resp.headers['Cache-Control'] = 'no-store'
     return resp
+
+
+# ── Voice tab ───────────────────────────────────────────────────────
+# The voice stack is a separate process (python -m voice.run_phase0): it owns
+# the C270's ALSA device, which is exclusive, so web.py never imports ``voice``.
+# It publishes voice_status.json; we re-serve it. The only thing that goes the
+# other way is voice_command.json, a two-verb diagnostic inbox.
+VOICE_STATUS_PATH = Path(TELEMETRY_DIR) / 'voice_status.json'
+VOICE_COMMAND_PATH = Path(TELEMETRY_DIR) / 'voice_command.json'
+VOICE_OUTPUT_PATH = Path(TELEMETRY_DIR) / 'voice_output.json'
+VOICE_VERBS = ('listen', 'speak_test', 'announce_who', 'call_person', 'ask', 'report')
+VOICE_NOTES_DIR = Path(TELEMETRY_DIR) / 'voice_notes'
+# Ids are minted by the voice process: epoch-ms + 4 hex. Anything else is a
+# path-traversal attempt or a typo, never a note.
+VOICE_NOTE_ID_RE = re.compile(r'^[0-9]{10,14}-[0-9a-f]{4}$')
+VOICE_STALE_DEFAULT_S = 10.0
+
+
+def _voice_payload():
+    """(payload, age_s) from voice_status.json, or (None, None)."""
+    try:
+        with VOICE_STATUS_PATH.open('r', encoding='utf-8') as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    try:
+        age = max(0.0, time.time() - float(payload.get('updated_at', 0)))
+    except (TypeError, ValueError):
+        return None, None
+    return payload, age
+
+
+def _voice_running(payload, age) -> bool:
+    if payload is None:
+        return False
+    try:
+        limit = float(payload.get('stale_after_s', VOICE_STALE_DEFAULT_S))
+    except (TypeError, ValueError):
+        limit = VOICE_STALE_DEFAULT_S
+    return age is not None and age <= limit
+
+
+def _voice_reader_signed_in(req) -> bool:
+    """Side-effect-free sign-in check (never feeds the wrong-password
+    throttle, so a polling tab cannot lock anyone out)."""
+    auth = req.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        _payload, reason = _check_token(auth[7:].strip(), 'a')
+        return not reason
+    given = req.headers.get('X-AGV-Password', '')
+    return bool(given) and hmac.compare_digest(given.encode(), _PASSWORD.encode())
+
+
+@flask_app.route('/api/voice/status', methods=['GET'])
+def api_voice_status():
+    """Voice pipeline health + recent activity. Read-only, never 500s.
+
+    Lane health is open (like points.json). Transcripts, narration text and
+    parse rows are operator speech, so they are only included for a signed-in
+    session. A stale file is reported as ``running: false`` rather than shown
+    as if it were current.
+    """
+    payload, age = _voice_payload()
+    running = _voice_running(payload, age)
+    if payload is None or not running:
+        body = {'running': False, 'stale': True,
+                'age_s': None if age is None else round(age, 1),
+                'hint': 'python -m voice.run_phase0'}
+    else:
+        body = dict(payload)
+        body['running'] = True
+        body['stale'] = False
+        body['age_s'] = round(age, 1)
+        if _voice_reader_signed_in(request):
+            body['redacted'] = False
+        else:
+            body['redacted'] = True
+            for key in ('transcripts', 'narration', 'parses', 'notes'):
+                body[key + '_n'] = len(body.pop(key, None) or [])
+            cmd = dict(body.get('command') or {})
+            cmd['detail'] = ''
+            body['command'] = cmd
+    resp = make_response(json.dumps(body))
+    resp.headers['Content-Type'] = 'application/json'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@flask_app.route('/api/voice/notes/<note_id>.wav', methods=['GET'])
+def api_voice_note(note_id):
+    """Play back a recent microphone capture (a "voice note").
+
+    Room audio, so it is signed-in only — and the browser's <audio> tag
+    cannot send an Authorization header, so the page fetches this as a blob.
+    """
+    if not _voice_reader_signed_in(request):
+        return _rec_auth_fail()
+    if not VOICE_NOTE_ID_RE.match(note_id):
+        return jsonify({'error': 'not found'}), 404
+    path = VOICE_NOTES_DIR / (note_id + '.wav')
+    if not path.is_file():
+        return jsonify({'error': 'not found'}), 404
+    resp = send_file(path, mimetype='audio/wav')
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@flask_app.route('/api/voice/command', methods=['POST'])
+def api_voice_command():
+    """Ask the voice process to run a whitelisted verb.
+
+    ``listen`` / ``speak_test`` are diagnostics; ``announce_who`` / ``call_person``
+    make the rover say who the camera sees (fixed templates, enrolled names only).
+
+    Password-gated (it opens a microphone), whitelisted to four verbs, and it
+    only drops a file the voice process polls. It cannot reach the motors: a
+    diagnostics tab must not become a third path to them.
+    """
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    body = request.get_json(silent=True) or {}
+    verb = body.get('verb')
+    if verb not in VOICE_VERBS:
+        return jsonify({'error': 'verb must be one of: ' + ', '.join(VOICE_VERBS)}), 400
+    payload, age = _voice_payload()
+    if not _voice_running(payload, age):
+        return jsonify({'error': 'voice process is not running '
+                                 '(start: python -m voice.run_phase0)'}), 503
+    cmd = {'id': secrets.token_hex(6), 'verb': verb, 'ts': time.time()}
+    if verb == 'call_person':
+        # The only text from the browser that gets spoken is a name, and only an
+        # enrolled one: nothing else can ride in on this verb.
+        name = body.get('name')
+        if not isinstance(name, str) or not _cam_valid_name(name) \
+                or name not in [p['name'] for p in CAM_ANALYTICS.store.people()]:
+            return jsonify({'error': 'name must be an enrolled person'}), 400
+        cmd['name'] = name
+    if verb in ('listen', 'ask'):
+        try:
+            seconds = float(body.get('seconds', 3))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'seconds must be a number'}), 400
+        if seconds != seconds or seconds in (float('inf'), float('-inf')):
+            return jsonify({'error': 'seconds must be a finite number'}), 400
+        cmd['seconds'] = max(1.0, min(10.0, seconds))
+    tmp = VOICE_COMMAND_PATH.with_suffix('.json.tmp')
+    try:
+        tmp.write_text(json.dumps(cmd), encoding='utf-8')
+        os.replace(tmp, VOICE_COMMAND_PATH)
+    except OSError as exc:
+        log.warning('[API] voice command not written: %s', exc)
+        return jsonify({'error': 'could not queue command'}), 500
+    log.info('[API] voice %s queued from %s', verb, request.remote_addr)
+    return jsonify({'id': cmd['id'], 'verb': verb}), 202
+
+
+# Microphone check. Unlike the rest of the Voice tab this does not need the
+# voice process: connection is read from sysfs (no device opened), and the
+# working-test is one short capture. ``voice.mic`` is imported lazily and only
+# for these two functions, so a broken voice package cannot take the dashboard
+# down. If the voice process happens to be mid-listen the capture reports
+# "busy" instead of fighting it for the device.
+_MIC_LAST: dict = {}
+_MIC_LOCK = threading.Lock()
+# Separate lock: a speaker test and a mic test are different devices and must
+# not block or cancel each other, but two speaker tests at once would overlap
+# two clips on one sink and make both verdicts meaningless.
+_OUTPUT_LOCK = threading.Lock()
+
+
+@flask_app.route('/api/voice/mic', methods=['GET'])
+def api_voice_mic():
+    """Which microphone is connected, plus the result of the last test."""
+    try:
+        from voice.mic import mic_inventory
+        inv = mic_inventory()
+    except Exception as exc:                       # never break the dashboard
+        log.warning('[API] mic inventory failed: %s', exc)
+        inv = {'connected': None, 'error': 'could not inspect audio devices',
+               'cards': [], 'device': None}
+    inv['last_test'] = dict(_MIC_LAST) or None
+    resp = make_response(json.dumps(inv))
+    resp.headers['Content-Type'] = 'application/json'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@flask_app.route('/api/voice/mic/test', methods=['POST'])
+def api_voice_mic_test():
+    """Capture ~1.5 s and report whether audio is actually arriving.
+
+    Password-gated: it opens the microphone. One test at a time.
+    """
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    if not _MIC_LOCK.acquire(blocking=False):
+        return jsonify({'error': 'a microphone test is already running'}), 409
+    try:
+        from voice.mic import probe_microphone
+        result = probe_microphone(1.5)
+    except Exception as exc:
+        log.warning('[API] mic test failed: %s', exc)
+        result = {'ok': False, 'state': 'error', 'message': 'test could not run',
+                  'peak_rms': 0.0, 't': time.time()}
+    finally:
+        _MIC_LOCK.release()
+    _MIC_LAST.clear()
+    _MIC_LAST.update(result)
+    log.info('[API] mic test from %s: %s', request.remote_addr, result.get('state'))
+    return jsonify(result)
+
+
+@flask_app.route('/api/voice/output', methods=['GET'])
+def api_voice_output():
+    """Every output device, and which one Tarka is pointed at.
+
+    Read-only and open to any signed-in reader: it enumerates sinks with
+    ``pactl``/``aplay`` and opens no device. The list comes from the voice
+    process's own published payload when it is running, because that process
+    is the only one that should know about audio; this endpoint falls back to
+    enumerating directly when the voice process is down.
+    """
+    payload, age = _voice_payload()
+    block = payload.get('output') if isinstance(payload, dict) else None
+    if block and block.get('outputs'):
+        return jsonify(block)
+    try:
+        from voice.output import OutputSelector, list_outputs
+        block = OutputSelector(str(TELEMETRY_DIR)).describe(list_outputs())
+    except Exception as exc:
+        log.warning('[API] output enumeration failed: %s', exc)
+        return jsonify({'error': 'could not list audio outputs', 'outputs': []}), 503
+    return jsonify(block)
+
+
+@flask_app.route('/api/voice/output', methods=['POST'])
+def api_voice_output_set():
+    """Point Tarka's speech at a specific output device.
+
+    Password-gated, like the other voice routes, because it changes what the
+    rover does unattended. It writes a file the voice process polls — it never
+    touches the mixer itself, and it cannot reach the motors.
+
+    The device name is validated against the sinks that exist right now before
+    it is written, so a hand-edited file cannot push an arbitrary string into
+    a subprocess environment.
+    """
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    body = request.get_json(silent=True) or {}
+    device = body.get('device', 'auto')
+    try:
+        from voice.output import OutputSelector, list_outputs
+        listing = list_outputs()
+        selector = OutputSelector(str(TELEMETRY_DIR))
+        written, message = selector.write(
+            device, allowed=[o['id'] for o in listing['outputs']])
+    except Exception as exc:
+        log.warning('[API] output change failed: %s', exc)
+        return jsonify({'error': 'could not change the audio output'}), 503
+    if not written:
+        return jsonify({'error': message}), 400
+    log.info('[API] voice output set to %s from %s', message, request.remote_addr)
+    return jsonify(selector.describe(listing))
+
+
+@flask_app.route('/api/voice/output/test', methods=['POST'])
+def api_voice_output_test():
+    """Play a real cached phrase on one output and report whether it was heard.
+
+    Separate from ``/api/voice/output`` because the question it answers is
+    different: not "which device is selected" but "is audio actually coming
+    out of it". ``aplay`` exiting 0 is not that answer — a paired Bluetooth
+    speaker that is powered off accepts the stream and produces silence, so
+    the verdict comes from watching whether the sink ever left ``SUSPENDED``.
+
+    Password-gated (it makes noise) and one at a time. It cannot reach the
+    motors; it only starts a player for at most a few seconds.
+    """
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    if not _OUTPUT_LOCK.acquire(blocking=False):
+        return jsonify({'error': 'a speaker test is already running'}), 409
+    try:
+        body = request.get_json(silent=True) or {}
+        device = body.get('device') or ''
+        try:
+            from voice.output import list_outputs, probe_playback
+            # Validate against the live list, same as the write path: a name
+            # that is not a real sink never reaches a subprocess environment.
+            allowed = {o['id'] for o in list_outputs()['outputs']}
+            if device and device != 'auto' and device not in allowed:
+                return jsonify({'error': 'that is not one of the current outputs',
+                                'audible': False}), 400
+            result = probe_playback(device or 'auto')
+        except Exception as exc:
+            log.warning('[API] speaker test failed: %s', exc)
+            result = {'audible': False, 'played': False, 'reason': 'test could not run'}
+    finally:
+        _OUTPUT_LOCK.release()
+    log.info('[API] speaker test on %s: %s (%s)', result.get('device'),
+             result.get('audible'), result.get('reason'))
+    return jsonify(result)
 
 
 @flask_app.route('/', methods=['GET'])
@@ -536,11 +897,25 @@ def api_mode():
 
 @flask_app.route('/api/manual', methods=['POST'])
 def api_manual():
-    """Manual drive command {"v": -1..1, "w": -1..1} (forward / turn right).
+    """Manual drive command. Two payload shapes, not one:
 
-    Hold-to-drive: the browser repeats this ~10 times a second; the AGV treats
-    a command older than MANUAL_STALE_S as released and stops. Needs the
-    password and MANUAL mode with the motors ON.
+    ``{"v": -1..1, "w": -1..1}`` — forward / turn right. The d-pad and the
+    W A S D / arrow keys. This is the whole-vehicle vector, mixed by the
+    motion layer.
+
+    ``{"left": -1..1, "right": -1..1}`` — per-wheel, as a fraction of the
+    speed cap. The Bench tab's chassis diagram and its per-side sliders, for
+    testing one driver against the other. ``raw: true`` additionally bypasses
+    the encoder PID, so the wheels take raw PWM for that one command.
+
+    When ``left``/``right`` are present they win and ``v``/``w`` are ignored,
+    so a payload carrying both is not an error. The two shapes are not
+    interchangeable: they clear different state in ``control.json``, and the
+    dashboard has a call site for each.
+
+    Hold-to-drive either way: the browser repeats this ~10 times a second; the
+    AGV treats a command older than MANUAL_STALE_S as released and stops. Needs
+    the password and MANUAL mode with the motors ON.
     """
     ok, status = _password_ok(request)
     if not ok:
@@ -597,9 +972,20 @@ def _rec_status() -> dict:
 
 @flask_app.route('/api/record', methods=['GET', 'POST'])
 def api_record():
-    """Recording control. POST {"action": "start"|"stop"|"mark", "rate": fps,
-    "views": bool, "mode": "continuous"|"triggered", "note": text}. No sign-in needed: it never moves the rover and
-    is capped by size, time and free disk (see recorder.py)."""
+    """Recording control.
+
+    POST {"action": "start"|"stop"|"mark"|"auto", "rate": fps, "views": bool,
+          "mode": "continuous"|"triggered", "note": text, "enabled": bool}
+
+    "auto" is the one that is not about the current session: it sets the
+    standing preference that makes the *dashboard* start a recording when the
+    rover begins driving in AUTO and stop it when the drive ends. The trigger
+    and the save-or-delete prompt are front-end, so this route only has to
+    carry the flag.
+
+    No sign-in needed for any of it: it never moves the rover and is capped by
+    size, time and free disk (see recorder.py).
+    """
     if request.method == 'POST':
         body = request.get_json(silent=True) or {}
         action = str(body.get('action', ''))
@@ -615,12 +1001,20 @@ def api_record():
             write_state(record=False)
         elif action == 'mark':
             write_state(record_mark=str(body.get('note', '')) or 'marked')
+        elif action == 'auto':
+            # The standing "record every AUTO drive" preference. No sign-in:
+            # like the rest of this route it cannot move the rover, and all it
+            # does is make the dashboard start writing frames to a directory
+            # that already exists. Turning it off stops future recordings; it
+            # never touches one already running (the caller stops that first).
+            write_state(record_auto=bool(body.get('enabled', False)))
         else:
-            return jsonify({'error': 'action must be start, stop or mark'}), 400
+            return jsonify({'error': 'action must be start, stop, mark or auto'}), 400
         log.info('[API] record %s from %s', action, request.remote_addr)
     state = read_state()
     return jsonify({'record': state['record'], 'rate': state['record_rate'],
-                    'views': state['record_views'], 'mode': state['record_mode'], **_rec_status()})
+                    'views': state['record_views'], 'mode': state['record_mode'],
+                    'auto': state['record_auto'], **_rec_status()})
 
 
 _MODE_CACHE: dict = {}
@@ -991,6 +1385,56 @@ def api_speed():
     return _control_json()
 
 
+@flask_app.route('/api/steer', methods=['GET', 'POST'])
+def api_steer():
+    """Line-following steering tuning (dashboard Drive tab).
+
+    POST takes any subset of ``{turn_floor_base, lookahead_m}``:
+      turn_floor_base  minimum turn authority, as a wheel-level PWM
+                       difference, the follower may use the moment it starts
+                       correcting. Pure pursuit alone asks for only a few PWM
+                       when the line is 10-20 cm off centre, which a
+                       skid-steer chassis cannot turn with, so this floor is
+                       what actually makes it steer.
+      lookahead_m      pure-pursuit lookahead, metres ahead of the rover.
+                       Short tracks the centre of the line tightly but is
+                       noisier; long is smooth but rides off-centre.
+
+    Clamped on the server: the slider ranges are a hint, not the authority, so
+    a hand-crafted request cannot demand more turning than TURN_FLOOR (the
+    fully-boosted maximum the tracking monitor already allows) nor a lookahead
+    so short the controller loses a usable sample. No password -- these can
+    only make the rover steer more, never less, so they cannot remove a
+    safety layer.
+    """
+    if request.method == 'POST':
+        body = request.get_json(silent=True) or {}
+        patch = {}
+        for key in ('turn_floor_base', 'lookahead_m'):
+            value = body.get(key)
+            if value is None:
+                continue
+            try:
+                patch[key] = STEER_CLAMPS[key](value)
+            except (TypeError, ValueError):
+                return jsonify({'error': f'{key} must be a number'}), 400
+        if patch:
+            write_state(**patch)
+            log.info('[API] steering tuning from %s: %s', request.remote_addr,
+                     {k: read_state()[k] for k in patch})
+    state = read_state()
+    return jsonify({
+        'turn_floor_base': state['turn_floor_base'],
+        'turn_floor_base_min': TURN_FLOOR_BASE_MIN,
+        'turn_floor_base_max': TURN_FLOOR_BASE_MAX,
+        'turn_floor_full': TURN_FLOOR,
+        'turn_floor_full_err_m': TURN_FLOOR_FULL_ERR_M,
+        'lookahead_m': state['lookahead_m'],
+        'lookahead_min_m': LOOKAHEAD_MIN_M,
+        'lookahead_max_m': LOOKAHEAD_MAX_M,
+    })
+
+
 @flask_app.route('/api/lidar', methods=['GET', 'POST'])
 def api_lidar():
     """Obstacle-safety zones for the rotating LiDAR (dashboard LiDAR tab).
@@ -1131,6 +1575,108 @@ def cam_mjpeg():
 @flask_app.route('/cam/status', methods=['GET'])
 def cam_status():
     return jsonify(CAM_PUBLISHER.status())
+
+
+@flask_app.route('/cam/detections', methods=['GET'])
+def cam_detections():
+    """Boxes, names, enrolment progress and events for the Camera-tab overlay.
+
+    Polling this is what wakes the analytics worker; it idles ~10 s after the
+    last poll. Public like /cam/status: it exposes names only, no images.
+    """
+    CAM_ANALYTICS.touch()
+    resp = jsonify(CAM_ANALYTICS.latest())
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@flask_app.route('/api/cam/settings', methods=['GET', 'POST'])
+def api_cam_settings():
+    """GET and POST return the same body; POST echoes the *clamped* values."""
+    if request.method == 'POST':
+        body = request.get_json(silent=True) or {}
+        # Turning the greeter on keeps the camera analysing with nobody at the
+        # dashboard and lets the rover say names aloud, so it is not an open knob.
+        if any(k in body for k in CAM_GREETER_KEYS):
+            ok, status = _password_ok(request)
+            if not ok:
+                return _auth_fail(status)
+        log.info('[API] cam settings %s from %s', sorted(body), request.remote_addr)
+        CAM_ANALYTICS.update_settings(body)
+    return jsonify({**CAM_ANALYTICS.settings(), 'limits': CAM_LIMITS,
+                    'classes_available': CAM_ANALYTICS.object_classes()})
+
+
+@flask_app.route('/api/cam/people', methods=['GET'])
+def api_cam_people():
+    """The roster with each person's profile; notes only for a signed-in reader."""
+    signed_in = _voice_reader_signed_in(request)
+    people = [dict(p, profile=_cam_profile_view(CAM_PROFILES_STORE.get(p['name']), signed_in))
+              for p in CAM_ANALYTICS.store.people()]
+    resp = jsonify({'people': people})
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@flask_app.route('/api/cam/people/<name>/profile', methods=['PUT'])
+def api_cam_person_profile(name):
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    if not _cam_valid_name(name) or name not in [p['name'] for p in CAM_ANALYTICS.store.people()]:
+        return jsonify({'error': 'no such person'}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        prof = CAM_PROFILES_STORE.set(name, body)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    log.info('[API] cam profile %r updated from %s', name, request.remote_addr)
+    return jsonify(prof)
+
+
+@flask_app.route('/api/cam/people/<name>/thumb', methods=['GET'])
+def api_cam_person_thumb(name):
+    jpg = CAM_ANALYTICS.store.thumb(name)
+    if jpg is None:
+        return jsonify({'error': 'no such person'}), 404
+    return Response(jpg, mimetype='image/jpeg', headers={'Cache-Control': 'no-cache'})
+
+
+@flask_app.route('/api/cam/people/<name>', methods=['DELETE'])
+def api_cam_person_delete(name):
+    # Auth: this edits who the system recognises, so it is not an open route.
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    if not CAM_ANALYTICS.remove_person(name):
+        return jsonify({'error': 'no such person'}), 404
+    log.info('[API] cam person removed %r from %s', name, request.remote_addr)
+    return jsonify({'removed': name, 'people': CAM_ANALYTICS.store.people()})
+
+
+@flask_app.route('/api/cam/enroll', methods=['POST'])
+def api_cam_enroll():
+    ok, status = _password_ok(request)
+    if not ok:
+        return _auth_fail(status)
+    body = request.get_json(silent=True) or {}
+    name = str(body.get('name', '')).strip()
+    if not _cam_valid_name(name):
+        return jsonify({'error': 'name must be 1-32 chars: letters, digits, space, _ . -'}), 400
+    try:
+        samples = int(body.get('samples', 8))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'samples must be a whole number'}), 400
+    if CAM_PUBLISHER.status()['frame_seq'] == 0:
+        return jsonify({'error': 'camera is not streaming'}), 409
+    log.info('[API] cam enrol %r from %s', name, request.remote_addr)
+    return jsonify(CAM_ANALYTICS.start_enroll(name, samples))
+
+
+@flask_app.route('/api/cam/enroll/cancel', methods=['POST'])
+def api_cam_enroll_cancel():
+    CAM_ANALYTICS.cancel_enroll()
+    return jsonify({'active': False})
 
 
 @flask_app.route('/detections', methods=['GET'])

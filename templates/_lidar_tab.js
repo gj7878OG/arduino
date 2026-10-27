@@ -75,8 +75,19 @@ lidarBox.addEventListener('change', async () => {
 });
 
 function updateLidarLive(data) {
-  const enabled = data.lidar_enabled === true;
+  // A status frame written just before the operator's own change still carries
+  // the old value, and applying it snaps the tick box back off for a frame or
+  // two while the server is already on. obstBox has had a guard for this
+  // (obstSetAt); for two seconds the operator's choice wins. Everything else
+  // in here — the readouts, the action colour, the tab dot — still follows the
+  // telemetry, because it uses `enabled` below.
+  const settled = Date.now() - lidarSetAt >= 2000;
+  const enabled = settled ? (data.lidar_enabled === true) : lidarBox.checked;
   lidarBox.checked = enabled;
+  // Read-only mirror of the arm switch, which lives on the Drive tab now.
+  // This tab must never look like it is armed when the sensor is not.
+  const here = $('lidar-armed-here');
+  if (here) here.checked = enabled;
   $('lidar-label').textContent = enabled
     ? 'LiDAR obstacle safety armed' : 'LiDAR obstacle safety OFF (no obstacle sensing)';
   $('lidar-label').style.color = enabled ? '' : '#f87171';
@@ -274,8 +285,13 @@ function updateLidarStatusBar(data) {
   requestAnimationFrame(frame);
 
   async function tick() {
+    // Four requests a second, for the whole session, for a scan nobody is
+    // looking at. Skipped while the tab is hidden; opening the tab costs at
+    // most one 250 ms gap before the first frame lands.
+    const panel = $('tab-lidar');
+    if (panel && panel.hidden) return;
     try {
-      const r = await fetch('points.json?t=' + performance.now(),
+      const r = await fetch('/points.json?t=' + performance.now(),
                             { cache: 'no-store' });
       if (!r.ok) return;
       const d = await r.json();

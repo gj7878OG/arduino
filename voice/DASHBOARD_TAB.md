@@ -1,6 +1,6 @@
 # Plan — a Voice tab on the AGV dashboard
 
-Status: **plan only, nothing implemented.** Written 2026-10-22.
+Status: **Implemented** (phases A, A2, B, C). Revised 2026-10-22. See §11.
 
 Goal: a read-only "Voice" tab that answers, at a glance and in detail,
 *is the voice stack actually working right now, and what did it just hear?*
@@ -19,7 +19,7 @@ inert as it is possible to make:
 | File | Change | Size | Nature |
 |---|---|---|---|
 | `web.py` | **one** new route | ~18 lines | read-only `GET`, no auth needed |
-| `templates/dashboard.html` | 4 insert lines | ~4 lines | nav button, 3 includes, `TAB_IDS` entry |
+| `templates/dashboard.html` | 5 one-line inserts | ~5 lines | nav button, 3 includes, `TAB_IDS` entry |
 | `templates/_voice_tab.{html,js,css}` | **new files** | ~380 lines | new |
 | `voice/status.py` | **new file** | ~230 lines | new, voice-side |
 | `voice/telemetry.py` | **new file** | ~150 lines | new, voice-side |
@@ -82,7 +82,26 @@ same bug wearing a nicer shirt.
 
 ## 3. What the tab shows
 
-Six cards, mirroring `_lidar_tab.html`'s structure and visual language.
+Mirroring `_lidar_tab.html`'s structure and visual language. **As built** the
+tab is two columns (`grid` 2fr | 1fr, collapsing to one below 760px), split by
+what a card is *for* rather than by size:
+
+    left  (wide)   hardware     Microphone · Speaker
+                   stack        Voice stack
+                   action       Try it
+    right (narrow) measurement   Latency
+                   conversation Live transcript · Voice notes · Narration
+                   command      Command parsing
+
+Latency used to sit dead last, far from the stack it measures; it now heads the
+right column, directly above the transcript whose timings it reports. It was
+originally grouped with the stack for that reason, but doing so left the columns
+badly lopsided (1340px against 660px) — measurement reads better beside the
+results than beside the machinery. Every card body is wrapped in `.tab-body` for
+the same inset the Drive tab's cards use.
+
+The "Card N" headings that follow describe what each card *is*; the numbers no
+longer match the reading order.
 
 ### Card 1 — Voice health (the status bar)
 
@@ -186,8 +205,8 @@ Payload schema (versioned, with `schema: 1`):
   "pid": 4821,
   "stale_after_s": 10.0,
   "lanes": {
-    "mic":      {"ok": true, "usb_id": "046d:0825", "card": 2,
-                 "device": "plughw:2,0", "product": "C270", "reason": ""},
+    "mic":      {"ok": true, "usb_id": "046d:0825", "card": 0,
+                 "device": "plughw:0,0", "product": "C270", "reason": ""},
     "stt":      {"ok": true, "backend": "deepgram", "model": "nova-3",
                  "confidence_floor": 0.55, "reason": ""},
     "tts":      {"ok": false, "cached": 0, "expected": 20,
@@ -231,8 +250,9 @@ unmodified — that's the acceptance criterion for this phase.
 
 ### New — `web.py` route
 
-One read-only `GET`, placed after `points_json()` (web.py:228) and
-copying its error-fallback idiom verbatim:
+One read-only `GET`, placed after `points_json()` and copying its
+error-fallback idiom verbatim (referenced by name, not line number, so
+this does not rot every time a route is added):
 
 ```python
 @flask_app.route('/api/voice/status', methods=['GET'])
@@ -257,15 +277,19 @@ Structurally identical to `_lidar_tab.*`. The JS follows `_lidar_tab.js`:
 (nothing here is), `setInterval` polling at 500 ms, and a
 `_ensureVoiceInited()` lazy hook so the tab costs nothing until opened.
 
-### Modified — `templates/dashboard.html` (4 lines)
+### Modified — `templates/dashboard.html` (5 one-line inserts)
 
-| Line | Insert |
+| Where (find it by) | Insert |
 |---|---|
-| after 203 | `{% include '_voice_tab.css' %}` |
-| after 394 | `<button … data-tab="voice" id="tabbtn-voice">Voice<i class="tabdot" id="dot-voice"></i></button>` |
-| after 626 | `{% include '_voice_tab.html' %}` |
-| after 1182 | `{% include '_voice_tab.js' %}` |
-| line 1581 | add `'voice'` to `TAB_IDS` |
+| after `_cam_tab.css` | `{% include '_voice_tab.css' %}` |
+| next to the other `tabbtn-*` buttons | `<button … data-tab="voice" id="tabbtn-voice">Voice<i class="tabdot" id="dot-voice"></i></button>` |
+| with the other `{% include '_*_tab.html' %}` | `{% include '_voice_tab.html' %}` |
+| next to the other `{% include '_*_tab.js' %}` | `{% include '_voice_tab.js' %}` |
+| in `const TAB_IDS = [...]` | add `'voice'` |
+
+Line numbers are deliberately not given here — they were in the first draft of
+this document and every one of them was wrong within a day. Anchor on the
+surrounding markup instead.
 
 Keyboard nav (`←`/`→`), `localStorage` tab persistence, and the a11y
 `role="tablist"` wiring all come free from `showTab()`.
@@ -359,3 +383,155 @@ but it's your call, and it ships separately so you can drop it.
   `0 / 20` and everything depends on Deepgram being up.
 - It does not measure real latency — it *starts* measuring it, honestly,
   by keeping throttled calls out of the median.
+
+---
+
+## 10. Revision 2 — what review found wrong with this plan
+
+Written after building Phase A and printing a real payload.
+
+### 10.1 Structural flaw: three of six cards have no data source
+
+`run_phase0.py` is TTS-only by design — **nothing in the voice process
+ever listens.** So Transcript, Mic meter, Parse lane and STT latency would
+render permanently empty. The plan promoted the *display* and left out the
+*producer*.
+
+**Fix: §8 "debug buttons" is no longer optional.** "Listen now" is the
+only thing that makes the transcript card live until voice v1 (wake word +
+dialogue loop) exists. The user's headline request — *"I want transcript on
+the tab"* — depends on it. Re-sequenced: Phase D moves ahead of C, and the
+command is **listen-only**: record → STT → show. It does not feed the parse
+lane or `control_state`.
+
+Constraints on the command channel (it is a deliberate exception to
+read-only, and it opens a microphone):
+
+- **Password-gated POST**, like every other privileged route — recording
+  room audio is a privacy action, not a diagnostic freebie.
+- Fixed verb whitelist: `listen`, `speak_test`. No free text from the
+  browser reaches TTS except a fixed phrase.
+- Single-flight + 2 s minimum gap, so a stuck button cannot hammer a paid
+  API or hold the mic.
+- Delivered via a `voice_command.json` the voice process polls; **no
+  listening socket**, no import path from `web.py` into `voice`.
+
+### 10.2 Show `ok / degraded / down`, not a boolean
+
+The plan promised three states; the payload carries a bool. Real data
+shows why it matters: TTS reports `ok: true` with **0/20 phrases cached**.
+That's "working but fragile (all speech depends on Deepgram)", not green.
+Add `state` to each lane; cache-empty → `degraded`.
+
+### 10.3 Don't hardcode the ALSA card
+
+The plan's example showed `card 2`. This machine now reports **card 0**
+for the same C270. Discovery by VID:PID is the reason that works; the tab
+must display what was found, never an expected value.
+
+### 10.4 Transcript privacy
+
+`/api/voice/status` mirrors `points.json` (open GET). Lane health is
+harmless; **transcripts are operator speech.** Serve lanes/health openly
+but include `transcripts`, `narration` text and `parses` only for an
+authenticated session (reuse `_rec_read_ok`). Costs ~3 lines in the route.
+
+### 10.5 Smaller corrections
+
+- `dashboard.html` needs **five** inserts, not four (css include, nav
+  button, html include, js include, `TAB_IDS`).
+- Parse lane is not constructed in `run_phase0` — wire `AgentParser` when a
+  Gemini key is present; otherwise the lane correctly reads "not configured".
+- Hooks → **wrappers.** Built as `TelemetrySpeaker` / `TelemetryBackend` /
+  `TelemetryParser` instead of editing `mic/stt/tts/explain/agent`. The
+  existing voice modules are unmodified; only `run_phase0.py` changed.
+- Mic meter is read live from `SttEngine.meter` instead of being recorded.
+- `TelemetryParser` splits `throttled` / `backend_error` / `rejected` /
+  `accepted`. This closes the ambiguous-`None` item from the open-issues
+  list, and a test caught that exceptions bypassed recording.
+
+### 10.6 Revised sequencing
+
+| Phase | Content | Status |
+|---|---|---|
+| A | `voice/telemetry.py`, `voice/status.py`, `run_phase0` wiring | built, 19 new tests |
+| A2 | `voice_command.json` listener in the voice process (listen / speak_test) | built, 13 tests, verified live on the C270 |
+| B | `GET /api/voice/status` (auth-split) + `POST /api/voice/command` | built, 20 tests |
+| C | Tab templates + `dashboard.html` | built, browser test |
+
+
+---
+
+## 11. As built
+
+**Run it:** start the dashboard as usual, then in another terminal
+`python -m voice.run_phase0`. Open the **Voice** tab (`#voice`). Sign in to
+see transcripts; press **Listen now** and speak.
+
+| Piece | File | Notes |
+|---|---|---|
+| Recording + wrappers | `voice/telemetry.py` | bounded rings, no edits to mic/stt/tts/explain/agent |
+| Publisher | `voice/status.py` | `voice_status.json`, atomic, key *presence* only |
+| Command inbox | `voice/command.py` | `listen` / `speak_test`, fixed phrase, single-flight |
+| Runner wiring | `voice/run_phase0.py` | `--no-status` to turn it off |
+| Routes | `web.py` (+~100 lines) | `/api/voice/status`, `/api/voice/command` |
+| Tab | `templates/_voice_tab.{html,css,js}` | `textContent` only, never `innerHTML` |
+| Nav | `templates/dashboard.html` | 5 one-line inserts |
+
+**Tests (new):** `test_voice_telemetry` 13, `test_voice_status` 8,
+`test_voice_command` 13, `test_web_voice` 20, `test_dashboard_ui_voice` 1
+(browser). Whole suite passes. The browser test was mutation-checked: making
+the transcript `innerHTML` makes it fail.
+
+**Verified live** (scratch dir, real C270 + Deepgram): web server and voice
+process share a directory; signed-out reads are redacted; a password POST
+queued a listen; the voice process ran it and the result appeared in the
+status; `verb:"drive"` was refused with 400.
+
+### Still open (not part of this tab)
+- The **parser lane** is not constructed by `run_phase0`, so it reads *down*
+  ("not configured") until a rules engine / parse loop exists.
+- Transcript, parse and latency cards fill only when something listens. Until
+  voice v1 exists, **Listen now** is the producer.
+- The RMS gate is a loudness gate: the meter makes that visible, it does not
+  fix it. Needs a real VAD.
+- 0 / 20 phrases cached: all speech still depends on the network.
+
+---
+
+## 12. Microphone card (added after §11)
+
+The tab showed "no data" for every lane whenever the voice process was off —
+including the microphone, which does not need that process to be checked.
+
+| Question | Answer comes from | Needs voice process? |
+|---|---|---|
+| Which mic is connected? | `voice.mic.mic_inventory()` — sysfs + `arecord -l`, opens nothing | no |
+| Is it working? | `voice.mic.probe_microphone()` — one 1.5 s capture, classified `working / silent / busy / missing / no_tool / error` | no |
+
+- `GET /api/voice/mic` (open, never 500s) and `POST /api/voice/mic/test`
+  (password, one at a time).
+- **Deliberate change to an earlier rule:** §2 said `web.py` must never touch
+  `voice`. It now lazily imports exactly two read-only functions
+  (`mic_inventory`, `probe_microphone`) inside the route handlers. A test
+  enforces: no module-level `voice` import, only `voice.mic`, only those two
+  names, and no reference to `MicCapture`/`SttEngine`/`listen`. If the voice
+  process is mid-listen the probe reports `busy` instead of fighting for the
+  device.
+- "Working" means audio is arriving, not that anyone spoke. Flat zero is
+  `silent` (muted/dead), never a pass. Unplugging after a good test shows
+  `not found`, never a stale "working".
+- Tests: `test_voice_mic_probe` (10), `test_web_voice` (+12),
+  `test_dashboard_ui_voice_mic` (browser, every state stubbed).
+
+---
+
+## 12. Addendum — the camera link (2026-10-22)
+
+`/api/voice/command` now accepts four verbs, not two: `listen`, `speak_test`, and
+`announce_who` / `call_person {name}`. The new two only make the rover say what the camera
+sees, from fixed templates; `call_person` takes the name of an *enrolled* person and nothing
+else is spoken from the browser. They are still password-gated, whitelisted, single-flight
+and unable to reach `control_state`. The status payload gains a `faces` lane (only when the
+face watcher runs). See `docs/cam-voice-integration-plan.md`.
+

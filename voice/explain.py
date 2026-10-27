@@ -89,6 +89,18 @@ class Explanation:
 # ── Backend ─────────────────────────────────────────────────────────
 
 
+class ExplainError(Exception):
+    """The narration backend produced nothing usable."""
+
+
+def _finish_reason(response: Any) -> str:
+    """The first candidate's finish reason as text, '' if unavailable."""
+    try:
+        return str(response.candidates[0].finish_reason or '')
+    except (AttributeError, IndexError, TypeError):
+        return ''
+
+
 class ExplainerBackend:
     """Thin Gemini wrapper. Returns prose or raises ``ExplainError``."""
 
@@ -136,8 +148,17 @@ class ExplainerBackend:
                 'system_instruction': SYSTEM_PROMPT,
                 'temperature': 0.2,
                 'max_output_tokens': 90,
+                # Reasoning is wasted on a two-sentence narration and, worse,
+                # it spends the output budget: with thinking on, Gemini was
+                # cut off after one word ("I") and that fragment was spoken.
+                'thinking_config': {'thinking_budget': 0},
             },
         )
+        # A truncated narration must degrade to the persona template, never
+        # be spoken as a half-sentence.
+        finish = _finish_reason(response)
+        if 'MAX_TOKENS' in finish:
+            raise ExplainError(f'narration truncated ({finish})')
         return (response.text or '').strip()
 
 

@@ -105,5 +105,41 @@ def test_extra_slots_are_ignored_safely():
     assert out == 'Moving.'
 
 
+# ── camera link phrases ─────────────────────────────────────────────
+def test_every_persona_event_has_a_template_and_renders():
+    """A new event name with no template would be silently mute."""
+    from voice._constants import PERSONA_EVENTS
+    from voice.persona import render_event
+    slots = dict(reason='x', mode='auto', pct=5, greeting='Hi', name='A', names='A', others='one person')
+    for ev in PERSONA_EVENTS:
+        out = render_event(ev, **slots)
+        assert out and '{' not in out, ev
+
+
+def test_camera_phrases():
+    from voice.persona import render_event as r
+    assert r('person_greeted', greeting='Welcome back, Alice.') == 'Welcome back, Alice.'
+    assert r('person_called', name='Alice') == 'Alice, please come to the rover.'
+    assert r('person_not_seen', name='Alice') == "I can't see Alice."
+    assert r('who_none') == "I don't see anyone."
+    assert r('who_known', names='Alice and Bob') == 'I see Alice and Bob.'
+    assert r('who_mixed', names='Alice', others='two people') == "I see Alice and two people I don't recognise."
+    assert r('who_strangers', others='one person') == "I see one person I don't recognise."
+    assert r('person_unknown') == 'Unrecognised person.'
+
+
+def test_blind_phrase_does_not_claim_an_empty_room():
+    from voice.persona import render_event as r
+    text = r('who_blind').lower()
+    assert "can't see" in text and 'anyone' not in text and 'nobody' not in text
+
+
+def test_name_events_are_flagged_dynamic_and_the_rest_are_not():
+    from voice._constants import DYNAMIC_EVENTS, PERSONA_EVENTS
+    assert DYNAMIC_EVENTS <= PERSONA_EVENTS
+    assert {'person_greeted', 'person_called', 'person_not_seen', 'who_known', 'who_mixed'} == DYNAMIC_EVENTS
+    assert 'who_none' not in DYNAMIC_EVENTS and 'lidar_hold' not in DYNAMIC_EVENTS
+
+
 if __name__ == '__main__':
     _env.run_tests(globals())

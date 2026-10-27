@@ -349,5 +349,32 @@ def test_engine_is_thread_safe_under_concurrent_speak():
     assert len(s.spoken) == 8 * 50
 
 
+# ── events that carry a name never use a pre-recorded clip ─────────
+def test_dynamic_events_bypass_the_phrase_cache():
+    """A clip called person_greeted.wav would play without the person's name."""
+    import tempfile
+    from pathlib import Path
+    from voice.tts import PhraseCache, TtsEngine
+
+    class Play:
+        def __init__(self): self.paths = []
+        def play(self, path): self.paths.append(Path(path).name); return True
+
+    class Synth:
+        available = True
+        def __init__(self): self.said = []
+        def synthesize(self, text): self.said.append(text); return b'RIFF....WAVE'
+
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / 'person_greeted.wav').write_bytes(b'canned clip with no name in it')
+        (Path(d) / 'lidar_hold.wav').write_bytes(b'cached safety clip')
+        play, synth = Play(), Synth()
+        eng = TtsEngine(cache=PhraseCache(Path(d)), playback=play, synthesizer=synth)
+        eng.speak_event('person_greeted', 'Hello, Alice.')
+        eng.speak_event('lidar_hold', 'Holding.')
+    assert synth.said == ['Hello, Alice.'], 'the canned clip was used instead of the name'
+    assert 'person_greeted.wav' not in play.paths and 'lidar_hold.wav' in play.paths
+
+
 if __name__ == '__main__':
     _env.run_tests(globals())

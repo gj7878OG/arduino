@@ -360,5 +360,60 @@ def test_capture_without_device_is_unavailable():
     assert cap.available is False
 
 
+# ── the "no mic" warning must stay readable ──────────────────────────
+
+# The real output of `arecord -l` on this Jetson: a banner, then 20 onboard
+# ADMAIF devices each with two subdevice lines. Passing that through
+# unfiltered produced a single ~5000-character log line.
+ARECORD_L = '\n'.join(
+    ['**** List of CAPTURE Hardware Devices ****'] +
+    ['card 1: APE [NVIDIA Jetson Orin Nano APE], device %d: '
+     'fe.admaif@290f000.ADMAIF%d (*) []\n  Subdevices: 1/1\n'
+     '  Subdevice #0: subdevice #0' % (i, i + 1) for i in range(20)])
+
+
+def test_capture_cards_are_devices_not_subdevice_furniture():
+    """The banner and subdevice lines are not capture devices."""
+    with _patched(mic.shutil, 'which', lambda n: '/usr/bin/arecord'):
+        with _patched(mic.subprocess, 'run',
+                      lambda a, **k: _Completed(ARECORD_L)):
+            cards = mic.list_capture_cards()
+    assert len(cards) == 20
+    assert all(c.startswith('card ') for c in cards), cards[:2]
+    assert not any('Subdevice' in c for c in cards)
+    assert not any(c.startswith('****') for c in cards)
+    # ~2.7 kB of real `arecord -l` output; the summary must be orders
+    # of magnitude shorter than what it replaces.
+    assert len(ARECORD_L) > 2500, 'the fixture must stay realistically noisy'
+
+
+def test_the_mic_warning_is_one_short_line():
+    """The bug: a single log line carrying the whole of `arecord -l`."""
+    with _patched(mic.shutil, 'which', lambda n: '/usr/bin/arecord'):
+        with _patched(mic.subprocess, 'run',
+                      lambda a, **k: _Completed(ARECORD_L)):
+            summary = mic.summarise_capture_cards()
+    assert len(summary) < 200, summary
+    assert 'more' in summary, 'a truncated list must say so: %r' % summary
+
+
+def test_a_summary_with_nothing_to_report_says_so():
+    with _patched(mic.shutil, 'which', lambda n: None):
+        assert mic.summarise_capture_cards() == 'none detected'
+
+
+def test_losing_the_mic_leaves_audio_output_working():
+    """Input and output are separate; a dead webcam must not mute the rover."""
+    from voice.tts import SystemPlayback
+
+    with _patched(mic, 'find_alsa_card', lambda *a, **k: None):
+        with _patched(mic.shutil, 'which', lambda n: '/usr/bin/arecord'):
+            with _patched(mic.subprocess, 'run',
+                          lambda a, **k: _Completed(ARECORD_L)):
+                cap = MicCapture()
+    assert cap.available is False
+    assert SystemPlayback().timeout_s > 0
+
+
 if __name__ == '__main__':
     _env.run_tests(globals())

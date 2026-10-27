@@ -1,4 +1,15 @@
 /* _cam_tab.css — minimal styling for the USB-camera feed card. */
+/* Card body inset. The cam and voice cards used to lay their content flush
+   against the card border, which read as a different product from the Drive
+   tab. Every card here wraps its content in .tab-body. */
+.tab-body { padding: .9rem 1rem 1rem; }
+.tab-body > :first-child { margin-top: 0; }
+.tab-body > :last-child { margin-bottom: 0; }
+/* .note had no rule anywhere, so these explanations rendered in body-text
+   colour at body-text size and shouted as loudly as the values they describe. */
+.tab-body .note { color: #93a2b8; font-size: .8rem; line-height: 1.45; margin: .7rem 0; }
+.tab-body .note code { font-size: .95em; }
+
 .cam-bar { display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; padding: .6rem .9rem;
            align-items: center; background: rgba(11,15,21,.55);
            border: 1px solid var(--border, #2a3140); border-radius: 10px;
@@ -14,9 +25,14 @@
 .cstat .v { font: 600 .85rem/1 ui-monospace, monospace; color: var(--ink, #e8edf4); }
 @keyframes cam-blink { 0%,100%{opacity:1;} 50%{opacity:.55;} }
 
+/* The source is 640x480, so at full card width this box was being upscaled
+   more than 2x — a huge black rectangle that pushed every panel below the
+   fold. Cap the width off the viewport height so the 4:3 box fits on screen,
+   and centre it in whatever is left. */
 .cam-frame-wrap { position: relative; background: #000;
                   border: 1px solid var(--border, #2a3140); border-radius: 12px;
                   overflow: hidden; aspect-ratio: 4 / 3;
+                  max-width: min(100%, 76vh); margin-inline: auto;
                   display: flex; align-items: center; justify-content: center; }
 .cam-frame-wrap img { width: 100%; height: 100%; object-fit: contain;
                       background: #000; display: block; }
@@ -38,3 +54,84 @@
 .pill.cam-pending { background: #6b7280; color: #0b0f15; }
 .pill.cam-live    { background: #22c55e; color: #0b0f15; }
 .pill.cam-stale   { background: #f59e0b; color: #0b0f15; }
+
+/* ── Camera tab · detection controls, overlay, panels ── */
+.cam-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin: 0 0 .7rem; }
+.cam-toggle { padding: .35rem .85rem; background: #344054; color: #e8edf4; border: 1px solid transparent;
+              border-radius: 6px; cursor: pointer; font: 600 .8rem/1 ui-monospace, monospace; }
+.cam-toggle:hover { background: #475569; }
+.cam-toggle[aria-pressed="true"] { background: #14532d; border-color: #4ade80; color: #bbf7d0; }
+.cam-slider { display: inline-flex; align-items: center; gap: .5rem; }
+.cam-slider .lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: #94a3b8; }
+.cam-slider input[type=range] { width: 9rem; accent-color: #60a5fa; height: 1.6rem; }
+.cam-perf { margin-left: auto; font-size: .72rem; color: #94a3b8; }
+#cam-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.cam-model-note { margin: .5rem 0 0; padding: .4rem .7rem; border-radius: 8px; font-size: .8rem;
+                  background: rgba(245,158,11,.12); border: 1px solid #f59e0b66; color: #fbbf24; }
+
+.cam-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem;
+            max-height: 14rem; overflow-y: auto; font-size: .82rem; }
+.cam-list li { display: flex; align-items: center; gap: .5rem; }
+.cam-empty { color: #6b7a90; font-size: .8rem; }
+.cam-id-dot { width: .6rem; height: .6rem; border-radius: 50%; flex: none; background: #f87171; }
+.cam-id-dot.known { background: #4ade80; }
+.cam-face-name { font-weight: 600; }
+.cam-meter { position: relative; flex: 1; min-width: 3rem; height: .4rem; border-radius: 3px; background: #293342; }
+.cam-meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #60a5fa; }
+.cam-meter b { position: absolute; top: -.15rem; bottom: -.15rem; width: 2px; background: #fbbf24; }
+.cam-events li { color: #aebbd0; }
+.cam-events time { color: #6b7a90; font: .72rem ui-monospace, monospace; }
+
+.cam-enroll { display: flex; flex-wrap: wrap; gap: .5rem; }
+.cam-enroll input { flex: 1; min-width: 8rem; padding: .4rem .6rem; background: #0b0f15; color: #e8edf4;
+                    border: 1px solid #293342; border-radius: 6px; font: .85rem ui-monospace, monospace; }
+.cam-enroll input:focus { outline: 1px solid #60a5fa; }
+.cam-enroll button { padding: .4rem .85rem; background: #344054; color: #e8edf4; border: 0; border-radius: 6px;
+                     cursor: pointer; font: 600 .8rem/1 ui-monospace, monospace; }
+.cam-enroll button:hover { background: #475569; }
+.cam-enroll button:disabled { opacity: .5; cursor: default; }
+.cam-progress { height: .5rem; margin: .6rem 0 .1rem; background: #293342; border-radius: 4px; overflow: hidden; }
+.cam-progress i { display: block; height: 100%; width: 0; background: #4ade80; transition: width .25s; }
+
+.cam-roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(4.6rem, 1fr)); gap: .6rem; }
+/* The empty-state paragraph is a grid item, so it was being squeezed into a
+   single 4.6rem column and wrapping one word per line. Let it span. */
+.cam-roster > .cam-empty { grid-column: 1 / -1; margin: 0; }
+.cam-person { position: relative; text-align: center; font-size: .78rem; }
+.cam-person img, .cam-person .cam-nothumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px;
+                                            background: #0b0f15; border: 1px solid #293342; display: block; }
+.cam-person .cam-nothumb { display: flex; align-items: center; justify-content: center; color: #6b7a90; font-size: 1.4rem; }
+.cam-person .nm { margin-top: .25rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cam-person .ct { color: #6b7a90; font-size: .7rem; }
+.cam-person button { position: absolute; top: .2rem; right: .2rem; width: 1.4rem; height: 1.4rem; padding: 0; line-height: 1;
+                     border: 0; border-radius: 50%; background: rgba(11,15,21,.8); color: #f87171; cursor: pointer; }
+.cam-person button:hover { background: #7f1d1d; color: #fff; }
+
+.cam-profile h4 { margin: .8rem 0 .4rem; font-size: .8rem; color: #e8edf4; }
+.cam-profile { display: flex; flex-direction: column; gap: .5rem; margin-top: .6rem; padding-top: .6rem; border-top: 1px solid #293342; }
+.cam-profile label { display: flex; flex-direction: column; gap: .2rem; font-size: .72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
+.cam-profile input[type=text], .cam-profile textarea, .cam-slider input[type=number] {
+  padding: .4rem .6rem; background: #0b0f15; color: #e8edf4; border: 1px solid #293342; border-radius: 6px;
+  font: .85rem ui-monospace, monospace; text-transform: none; letter-spacing: 0; }
+.cam-profile textarea { resize: vertical; }
+.cam-profile input:focus, .cam-profile textarea:focus, .cam-slider input[type=number]:focus { outline: 1px solid #60a5fa; }
+.cam-check { flex-direction: row !important; align-items: center; gap: .5rem !important; text-transform: none !important;
+             letter-spacing: 0 !important; font-size: .82rem !important; color: #e8edf4 !important; }
+.cam-slider input[type=number] { width: 5.5rem; }
+.cam-voice-line { display: flex; align-items: center; gap: .5rem; margin: 0 0 .6rem; font-size: .82rem; }
+.cam-greeter { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .7rem; }
+.cam-greeter button:not(.cam-toggle) { padding: .35rem .85rem; background: #344054; color: #e8edf4; border: 0; border-radius: 6px;
+                                       cursor: pointer; font: 600 .8rem/1 ui-monospace, monospace; }
+.cam-greeter button:not(.cam-toggle):hover:not(:disabled) { background: #475569; }
+.cam-greeter button:disabled, .cam-person .cam-call:disabled { opacity: .45; cursor: default; }
+/* Two inline-flex label rows in a narrow sidebar: the number input and the
+   checkbox label were fighting for one line, and the checkbox text broke
+   mid-phrase. Give each its own full-width row. */
+#cam-greeter-panel .cam-slider, #cam-greeter-panel .cam-check { display: flex; width: 100%; margin-bottom: .5rem; }
+#cam-greeter-panel .cam-slider .lbl { flex: none; }
+.cam-id-dot.warn { background: #fbbf24; }
+.cam-person .cam-edit, .cam-person .cam-call { position: static; width: auto; height: auto; border-radius: 6px; padding: .15rem .45rem;
+                                               margin: .25rem .15rem 0 0; font-size: .68rem; background: #344054; color: #e8edf4; }
+.cam-person .cam-edit:hover, .cam-person .cam-call:hover:not(:disabled) { background: #475569; color: #fff; }
+.cam-person.editing img, .cam-person.editing .cam-nothumb { border-color: #60a5fa; }
+.cam-person .greet-badge { display: inline-block; margin-top: .15rem; font-size: .62rem; color: #4ade80; }

@@ -77,7 +77,10 @@ else is treated as a no-op, not a rejection — safer than rejecting
 
 - Jokes, sarcasm, slang, emojis.
 - Apologies for things that are not its fault ("sorry the line is hard").
-- Operator's name. It does not know it.
+- A person's name, **unless** that person is enrolled on the dashboard camera, has
+  ticked "Greet by name", the Greeter switch is on, and the camera is confident
+  (see "People and names"). It never guesses a name, never names a stranger, and
+  never says a name it has merely heard.
 - Any profanity-adjacent phrase, even when the operator does.
 
 ## How it handles misunderstanding
@@ -112,3 +115,34 @@ from voice.persona import render_event
 text = render_event('lidar_hold', reason='person_ahead')
 # -> 'Holding — person ahead. Will retry when clear.'
 ```
+
+## People and names
+
+Until the camera link existed the rover did not know anyone, so this document said it
+never says a name. That rule now has a narrow, deliberate exception. The rover may say a
+person's name only when **all** of these hold:
+
+1. The person is enrolled (Camera tab) **and** ticked "Greet by name" for themselves.
+   The default is off, per person.
+2. The Greeter switch (dashboard, sign-in required) is on. The default is off.
+3. The identity is *stable* (several separate face embeddings agree) and clears the
+   greeter's own similarity bar, which is stricter than the bar for drawing a box.
+4. The camera is actually looking. If it is offline or stale the rover says
+   `"I can't see right now."`, never `"I don't see anyone."`.
+5. Nothing more urgent is being said. A greeting is dropped, never queued, behind a
+   safety announcement, and is never repeated inside the cooldown.
+
+What it says, all fixed templates (`voice/persona.py`):
+
+| Situation | Utterance |
+|---|---|
+| Opted-in person appears | their own greeting, else `"Hello, <name>."` |
+| Stranger (optional, off by default) | `"Unrecognised person."` |
+| Operator asks who is here | `"I see <names>."` / `"I see <names> and one person I don't recognise."` / `"I don't see anyone."` |
+| Operator asks it to call someone | `"<name>, please come to the rover."` / `"I can't see <name>."` |
+
+It never says a similarity score, never says "I think it's…", and never says anything
+from a person's notes. Recognition is a convenience, **not security**: a photo of a person
+will be recognised as them. Spoken names are synthesised by a cloud service (Deepgram)
+because a name cannot be pre-recorded; Gemini is never given a name.
+

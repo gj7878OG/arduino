@@ -287,5 +287,57 @@ def test_output_budget_is_bounded():
     assert MAX_CHARS > 0
 
 
+# ── Gemini request shape (regression: narrator spoke "I") ───────────
+
+
+class _FakeModels:
+    def __init__(self, finish='FinishReason.STOP', text='Holding.'):
+        self.kwargs, self.finish, self.text = None, finish, text
+
+    def generate_content(self, **kwargs):
+        from types import SimpleNamespace
+        self.kwargs = kwargs
+        cand = SimpleNamespace(finish_reason=self.finish)
+        return SimpleNamespace(text=self.text, candidates=[cand])
+
+
+def _backend_with(models):
+    from types import SimpleNamespace
+    b = ExplainerBackend(api_key='k')
+    b._client = SimpleNamespace(models=models)
+    return b
+
+
+def test_request_disables_thinking():
+    """Thinking spends the 90-token budget and truncates the narration."""
+    m = _FakeModels()
+    _backend_with(m).complete('x')
+    assert m.kwargs['config']['thinking_config'] == {'thinking_budget': 0}
+
+
+def test_truncated_narration_falls_back_to_persona_not_a_fragment():
+    m = _FakeModels(finish='FinishReason.MAX_TOKENS', text='I')
+    r = EventExplainer(backend=_backend_with(m)).explain('lidar_hold', reason='obstacle')
+    assert r.source == 'persona' and r.text != 'I'
+
+
+def test_truncation_raises_the_named_error_not_a_nameerror():
+    """Guards against the fallback being reached by accident (a NameError
+    is swallowed by explain() just the same)."""
+    m = _FakeModels(finish='FinishReason.MAX_TOKENS', text='I')
+    try:
+        _backend_with(m).complete('x')
+    except explain.ExplainError as exc:
+        assert 'truncated' in str(exc)
+        return
+    raise AssertionError('expected ExplainError')
+
+
+def test_complete_narration_is_used():
+    r = EventExplainer(backend=_backend_with(_FakeModels(text='Holding — obstacle ahead.'))
+                       ).explain('lidar_hold', reason='obstacle')
+    assert r.source == 'gemini'
+
+
 if __name__ == '__main__':
     _env.run_tests(globals())

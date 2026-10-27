@@ -65,5 +65,58 @@ def test_api_record_mode():
     assert r.status_code == 200 and r.get_json()['record'] is False
 
 
+def test_closed_loop_is_a_preference_not_a_command():
+    """Untick the encoders, press STOP / AUTO, and it must stay unticked.
+
+    This used to snap back to the config default on every stop and every
+    mode change, so the operator's choice was silently re-armed under them
+    on the next run. The manual drive command still has to be cleared —
+    only the standing preference survives.
+    """
+    p = _tmp('loop')
+    control_state.write_state(closed_loop=False, path=p)
+    assert control_state.read_state(p)['closed_loop'] is False
+
+    for kw in ({'enabled': False}, {'enabled': True}, {'mode': 'manual'},
+               {'mode': 'auto'}, {'enabled': False, 'mode': 'auto'}):
+        st = control_state.write_state(path=p, **kw)
+        assert st['closed_loop'] is False, f'{kw} re-armed the encoder PID'
+
+    # a fresh process reads the same choice back off disk
+    assert control_state.read_state(p)['closed_loop'] is False
+    # ... and it still toggles when the operator asks
+    assert control_state.write_state(closed_loop=True, path=p)['closed_loop'] is True
+
+
+def test_stop_still_zeroes_the_manual_command():
+    """The reset that closed_loop used to ride along with is still there."""
+    p = _tmp('loop_stop')
+    control_state.write_state(closed_loop=False, manual_lr=(0.5, -0.5), raw=True, path=p)
+    st = control_state.write_state(enabled=False, path=p)
+    assert st['manual_l'] is None and st['manual_r'] is None
+    assert st['manual_raw'] is False
+    assert st['closed_loop'] is False
+
+
+def test_status_reports_saved_choice_without_the_agv():
+    """With only the dashboard running there is no AGV to publish the wheel
+    control choice, so the status the WebSocket pushes must read it out of
+    control.json. Without that the tick box falls back to true and re-ticks
+    itself within 2 s of the operator unticking it."""
+    control_state.write_state(closed_loop=False)
+    assert web._read_status()['closed_loop_wanted'] is False
+    control_state.write_state(closed_loop=True)
+    assert web._read_status()['closed_loop_wanted'] is True
+
+
+def test_status_prefers_the_running_agv_value():
+    """A running AGV publishes the choice itself; that wins over the file,
+    so the two can never disagree once telemetry is live."""
+    control_state.write_state(closed_loop=False)
+    json.dump({'closed_loop_wanted': True}, open(web.STATUS_PATH, 'w'))
+    assert web._read_status()['closed_loop_wanted'] is True
+    os.remove(web.STATUS_PATH)
+
+
 if __name__ == '__main__':
     _env.run_tests(globals())

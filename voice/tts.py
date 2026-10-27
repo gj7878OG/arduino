@@ -35,7 +35,9 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
+
+from ._constants import DYNAMIC_EVENTS
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +78,11 @@ class SystemPlayback:
     never breaks the event watcher.
     """
 
-    def __init__(self, timeout_s: float = 5.0) -> None:
+    def __init__(self, timeout_s: float = 5.0, device: Optional[Callable[[], dict]] = None) -> None:
         self.timeout_s = timeout_s
+        # Callable returning the environment for a play call, e.g. the
+        # PULSE_SINK override from voice.output. None = machine default.
+        self._device = device
         self._tool: Optional[str] = None
         self._lock = threading.Lock()
 
@@ -86,12 +91,29 @@ class SystemPlayback:
             tool = self._tool or self._pick_tool()
         if tool is None:
             return False
+        env = None
+        if self._device is not None:
+            try:
+                env = self._device() or None
+            except Exception as exc:            # never break playback
+                log.warning('audio device lookup failed: %s', exc)
+        argv = [tool]
+        if env and env.get('PULSE_SINK') and os.path.basename(tool) == 'aplay':
+            # aplay's default PCM is raw ALSA, so PULSE_SINK is ignored and
+            # the stream never reaches the sound server at all. Verified on
+            # this machine: `aplay -q clip.wav` creates no sink input, while
+            # `aplay -D pulse` with PULSE_SINK set lands on the named sink.
+            # Without this, the speaker chosen on the dashboard would change
+            # nothing about where the audio goes.
+            argv += ['-D', 'pulse']
+        argv.append(str(path))
         try:
             subprocess.run(
-                [tool, str(path)],
+                argv,
                 check=True,
                 capture_output=True,
                 timeout=self.timeout_s,
+                env=env,
             )
             return True
         except FileNotFoundError:
@@ -201,7 +223,8 @@ class TtsEngine:
           2. Piper available + fallback_text given -> synthesise+play.
           3. otherwise -> log and return played=False.
         """
-        path = self.cache.path_for(cache_key)
+        # A clip named after a dynamic event would play without the person's name.
+        path = None if event in DYNAMIC_EVENTS else self.cache.path_for(cache_key)
         if path is not None:
             played = self._playback.play(path)
             if not played:
@@ -230,6 +253,16 @@ class TtsEngine:
         never litters /tmp on a device that runs for weeks.
         """
         audio = self._synthesizer.synthesize(text)
+        if not audio:
+            return False
+        return self.play_audio(audio)
+
+    def play_audio(self, audio: bytes) -> bool:
+        """Play WAV bytes through the engine's playback, then delete the file.
+
+        Used for audio assembled at speaking time (spliced number clips) as
+        well as synthesised speech. False means nothing played.
+        """
         if not audio:
             return False
         tmp = None

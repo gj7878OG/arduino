@@ -1,0 +1,171 @@
+<div class="tabpanel grid" id="tab-voice" role="tabpanel" aria-labelledby="tabbtn-voice" hidden>
+  <div class="stack">
+    <section class="card" id="voice-mic-card">
+      <h2>Microphone <span id="mic-chip" class="pill voice-off" style="margin-left:.5rem">checking…</span></h2>
+      <div class="tab-body">
+        <p class="note">Which microphone is plugged in, and whether audio is really arriving from it.
+          <strong>Connected</strong> is read from the USB bus. <strong>Working</strong> needs a test capture.
+          This works even when the voice process is not running.</p>
+        <div id="mic-headline" class="mic-headline">—</div>
+        <dl class="mic-facts" aria-label="Microphone details">
+          <div><dt>Device</dt><dd id="mic-product" class="mono">—</dd></div>
+          <div><dt>USB id</dt><dd id="mic-usb" class="mono">—</dd></div>
+          <div><dt>ALSA device</dt><dd id="mic-alsa" class="mono">—</dd></div>
+          <div><dt>Recorder (arecord)</dt><dd id="mic-arecord" class="mono">—</dd></div>
+          <div><dt>Last test</dt><dd id="mic-last" class="mono">not tested</dd></div>
+          <div><dt>Signal level</dt><dd id="mic-peak" class="mono">—</dd></div>
+        </dl>
+        <div class="voice-meter-track" aria-label="Test signal level">
+          <div id="mic-level-bar" class="voice-meter-bar"></div>
+        </div>
+        <div class="voice-try">
+          <button type="button" id="mic-test">Test microphone</button>
+          <span id="mic-test-msg" class="note" role="status">Needs a sign-in. Records about 1.5 seconds.</span>
+        </div>
+        <h3 class="mic-sub">All capture devices</h3>
+        <ul id="mic-cards" class="mic-cards" aria-label="Capture devices"></ul>
+      </div>
+    </section>
+
+    <section class="card" id="voice-output-card">
+      <h2>Speaker <span id="out-chip" class="pill voice-off" style="margin-left:.5rem">checking…</span></h2>
+      <div class="tab-body">
+        <p class="note">Where Tarka's voice comes out. "Auto" follows the
+          machine's default, which can be a Bluetooth speaker that is not
+          there — speech then plays into nothing while still reporting success.</p>
+        <div id="out-headline" class="mic-headline">—</div>
+        <div class="voice-try">
+          <label class="sr-only" for="out-device">Audio output</label>
+          <select id="out-device"></select>
+          <button type="button" id="out-apply">Use this speaker</button>
+          <button type="button" id="out-test" title="Play a short test clip on the selected speaker">Test speaker</button>
+        </div>
+        <span id="out-msg" class="note" role="status"></span>
+        <dl class="mic-dl">
+          <div><dt>Selected</dt><dd id="out-selected" class="mono">—</dd></div>
+          <div><dt>Machine default</dt><dd id="out-default" class="mono">—</dd></div>
+        </dl>
+        <ul id="out-cards" class="mic-cards" aria-label="Playback devices"></ul>
+      </div>
+    </section>
+
+    <section class="card" id="voice-card">
+      <h2>Voice stack <span id="voice-chip" class="pill voice-off" style="margin-left:.5rem">offline</span></h2>
+      <div class="tab-body">
+        <p class="note">
+          Read-only view of Tarka's voice pipeline. The voice process
+          (<code>python -m voice.run_phase0</code>) owns the microphone and publishes its
+          state; this tab only displays it. Nothing here can drive the rover.
+        </p>
+        <div id="voice-bar" class="voice-bar" aria-label="Voice process status">
+          <span class="vstat"><span class="dot" id="voice-dot"></span><span class="lbl">Process</span><span id="voice-proc" class="v">—</span></span>
+          <span class="vstat"><span class="lbl">PID</span><span id="voice-pid" class="v mono">—</span></span>
+          <span class="vstat"><span class="lbl">Update age</span><span id="voice-age" class="v mono">—</span></span>
+          <span class="vstat"><span class="lbl">Keys set</span><span id="voice-keys" class="v mono">—</span></span>
+        </div>
+        <div id="voice-offline" class="voice-offline" hidden>
+          <strong>Voice process not running</strong>
+          <span id="voice-offline-msg">No fresh voice_status.json.</span>
+          <code>python -m voice.run_phase0</code>
+        </div>
+        <div id="voice-lanes" class="voice-lanes" aria-label="Voice lanes"></div>
+      </div>
+    </section>
+
+    <section class="card" id="voice-try-card">
+      <h2>Try it</h2>
+      <div class="tab-body">
+        <p class="note">Runs on the voice process. Needs a sign-in because it opens the microphone.
+          <strong>Listen</strong> only records and transcribes; it does not issue a command.
+          <strong>Ask Tarka</strong> answers questions aloud — try <em>“what is your status”</em>,
+          <em>“how far is the nearest obstacle”</em>, <em>“what mode are you in”</em>, <em>“who are you”</em>.
+          Driving commands are recognised but declined: voice control is not switched on.</p>
+        <div class="voice-try">
+          <label for="voice-secs" class="label" style="margin:0">Listen for</label>
+          <select id="voice-secs">
+            <option value="3" selected>3 s</option>
+            <option value="5">5 s</option>
+            <option value="8">8 s</option>
+          </select>
+          <button type="button" id="voice-listen">Listen now</button>
+          <button type="button" id="voice-speak">Speak test</button>
+          <button type="button" id="voice-ask" title="Records a question, understands it with the rules engine and answers aloud">Ask Tarka</button>
+          <button type="button" id="voice-report" title="Tarka says her current status; no microphone">Status report</button>
+          <span id="voice-cmd-msg" class="note" role="status"></span>
+        </div>
+        <div class="voice-meter" aria-label="Microphone level">
+          <div class="voice-meter-track">
+            <div id="voice-meter-bar" class="voice-meter-bar"></div>
+            <div id="voice-meter-thr" class="voice-meter-thr" title="loudness gate"></div>
+          </div>
+          <div class="voice-meter-txt"><span id="voice-meter-val" class="mono">—</span>
+            <span class="note">last capture · loudness only, not speech detection</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="card" id="voice-latency-card">
+      <h2>Latency</h2>
+      <div class="tab-body">
+        <p class="note">How long each stage takes, once there is something to measure. Throttled
+          calls are counted separately and never folded into the median.</p>
+        <table class="voice-table" aria-label="Latency">
+          <thead><tr><th></th><th>p50</th><th>p95</th><th>samples</th><th>throttled</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Speech to text</th><td id="voice-lat-stt-p50" class="mono">—</td><td id="voice-lat-stt-p95" class="mono">—</td><td id="voice-lat-stt-n" class="mono">—</td><td id="voice-lat-stt-t" class="mono">—</td></tr>
+            <tr><th scope="row">Command parse</th><td id="voice-lat-parse-p50" class="mono">—</td><td id="voice-lat-parse-p95" class="mono">—</td><td id="voice-lat-parse-n" class="mono">—</td><td id="voice-lat-parse-t" class="mono">—</td></tr>
+          </tbody>
+        </table>
+        <p class="note">Nothing measured yet — run <strong>Try it</strong> below, or speak to the rover.</p>
+      </div>
+    </section>
+
+    <section class="card" id="voice-transcript-card">
+      <h2>Live transcript</h2>
+      <div class="tab-body">
+        <div id="voice-redact" class="note voice-redact" hidden>
+          Transcripts are operator speech, so they are hidden until you sign in.
+          <button type="button" id="voice-signin" class="linkbtn">Sign in</button>
+        </div>
+        <div id="voice-last" class="voice-last" aria-live="polite">
+          <div id="voice-last-text" class="voice-last-text">—</div>
+          <div id="voice-last-meta" class="voice-last-meta">nothing heard yet</div>
+        </div>
+        <ol id="voice-transcripts" class="voice-list" aria-label="Recent transcripts"></ol>
+        <p class="note">The line on each bar is the confidence floor
+          (<span id="voice-floor">0.55</span>). Below it, the transcript is discarded.</p>
+      </div>
+    </section>
+
+    <section class="card" id="voice-notes-card">
+      <h2>Voice notes</h2>
+      <div class="tab-body">
+        <p class="note">The last <span id="voice-notes-max">10</span> microphone captures, including ones the
+          loudness gate rejected. Press <strong>Play</strong> to hear what the C270 actually heard.
+          Room audio: sign-in only, kept in temporary storage, deleted when the voice process restarts.</p>
+        <ol id="voice-notes" class="voice-list voice-notes" aria-label="Recent voice notes"></ol>
+        <span id="voice-notes-msg" class="note" role="status"></span>
+      </div>
+    </section>
+
+    <section class="card" id="voice-narration-card">
+      <h2>Narration</h2>
+      <div class="tab-body">
+        <p class="note">What Tarka said. <em>played: no</em> means nobody heard it.</p>
+        <ol id="voice-narration" class="voice-list" aria-label="Recent narration"></ol>
+      </div>
+    </section>
+
+    <section class="card" id="voice-parse-card">
+      <h2>Command parsing</h2>
+      <div class="tab-body">
+        <p class="note">Every spoken command currently goes through the language model (the rules
+          engine is not built yet). <em>rejected</em> means the safety validator refused it;
+          <em>throttled</em> means the model could not be reached.</p>
+        <ol id="voice-parses" class="voice-list" aria-label="Recent parse attempts"></ol>
+      </div>
+    </section>
+  </div>
+</div>

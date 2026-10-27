@@ -116,11 +116,11 @@ record start / stop / mark and the session list do not.
 
 `./agv_motortest.sh` starts only the Arduino link and the dashboard (no camera,
 no vision, no line following). Open the dashboard, press **Enable manual
-access** (sign in, MANUAL + START in one click) and use the **Motor test** and
-**Chassis & encoders** tabs: per-side sliders and +/- buttons, raw PWM or PID
-speed, ramp, hold-to-spin wheel pairs, step test, encoder zero and ticks-per-
-metre calibration. It cannot run together with `./agv_run.sh` (both need the
-Arduino port); with the full project running, the same controls work too.
+access** (sign in, MANUAL + START in one click) and use the **Bench** tab:
+per-side sliders and +/- buttons, raw PWM or PID speed, ramp, hold-to-spin wheel
+pairs, step test, encoder zero and ticks-per-metre calibration. It cannot run
+together with `./agv_run.sh` (both need the Arduino port); with the full project
+running, the same controls work too.
 
 ## Recording test data (Record tab)
 
@@ -129,6 +129,25 @@ key to mark) saves a session under `recordings/<date_time>/`: the raw camera
 frames (after the software flip and green-cast fix, i.e. exactly what the
 detector saw) plus a log row per saved frame. A **mark** flags any frame you
 disagree with. Record start / stop / mark need no sign-in; deleting a session does.
+
+### Recording every AUTO drive
+
+**Switches → Drive → "Record every AUTO drive automatically"** (`record_auto`
+in `control.json`, **off** by default). With it on, the dashboard starts a
+recording itself the moment the rover actually begins driving — AUTO *and* the
+motors on, not merely AUTO selected — and stops it when the drive ends, then
+asks what to do with the session.
+
+The trigger and the prompt are front-end; the switch itself only carries the
+flag, so it needs no password (like `closed_loop`, it is a standing preference,
+not a command). It is **off** by default because every drive it covers writes
+frames to disk.
+
+What it deliberately does **not** do: a recording you started by hand is never
+stopped automatically, and nothing is deleted without an explicit Delete (which
+does ask for sign-in). The prompt is held until the motors are actually off, so
+leaving AUTO for MANUAL with the drive still live cannot throw a modal over a
+live d-pad.
 
 **What is stored:** frames (JPEG, full size, quality 88), `log.jsonl` rows (line
 offset / angle / lookahead / curvature, obstacle state, the decision, speeds,
@@ -275,9 +294,24 @@ encoding would load the CPU, so no video is recorded; per-frame JPEG is kept,
 which also keeps every frame independently usable.
 
 ### Tests
-`python3 tests/run_all.py` (about 1.5 min, isolated temp dirs and ports 5071/5072,
-no Arduino, never touches the live project) must print `ALL PASSED`;
-`python3 tests/run_all.py --e2e` also runs the end-to-end recording test.
+`python3 tests/run_all.py` (isolated temp dirs, no Arduino, never touches the live
+project) must print `ALL PASSED`; `python3 tests/run_all.py --e2e` also runs the
+end-to-end recording test.
+
+Each browser test spawns its own `web.py` on its own port, and the files run
+strictly one after another, so ports are reused rather than reserved: 5071–5082
+across the `test_*_ui*` files, and 5083/5084 for `test_dashboard_audit.py` — the
+full-dashboard audit (every route, every front-end call, every DOM id, every
+control, all seven tabs). Run it on its own any time the dashboard is live:
+
+```
+python3 tests/test_dashboard_audit.py     # also rewrites docs/dashboard-audit.md
+```
+
+One file is known to fail for a reason unrelated to the dashboard, so a red run
+is not automatically a dashboard bug: `test_voice_notes.py` fails with
+`'VoiceTelemetry' object has no attribute 'attach_notes'` (the method does not
+exist anywhere in `voice/`).
 
 ### Training-data notes
 Train from the raw frames plus the log. The detector's masks / lines are only

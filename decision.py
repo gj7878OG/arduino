@@ -171,6 +171,17 @@ class LineController:
         # Dashboard max-speed scale (set by the AGV each tick). The wheels run
         # at v * speed_scale, so loop gain grows with it.
         self.speed_scale = 1.0
+        # Minimum turn authority, as a wheel-level PWM difference, that is
+        # available the moment we start correcting. The tracking monitor adds
+        # on top of this up to TURN_FLOOR. Set by the AGV each tick from the
+        # dashboard slider; a skid-steer chassis that needs ~40 PWM to yaw at
+        # all will otherwise be handed only a few PWM here and drive straight.
+        self.turn_floor_base = TURN_FLOOR_BASE
+        # Pure-pursuit lookahead (metres ahead of the rover). Normally the
+        # vision result carries the real sampled distance; this is the fallback
+        # for a line too short to give one. Mirrors Vision.lookahead_m so both
+        # agree when the operator tunes it from the dashboard.
+        self.lookahead_m = LOOKAHEAD_M
         # Set by the AGV: True only while the wheels are really driving in AUTO
         # mode (the tracking monitor judges steering only then).
         self.moving = False
@@ -178,7 +189,13 @@ class LineController:
         self._align = False
 
     def reset(self) -> None:
+        # The dashboard tuning knobs are operator settings, not run state:
+        # re-arming the rover (or dropping out of MANUAL) must not undo them.
+        floor_base = self.turn_floor_base
+        look = self.lookahead_m
         self.__init__()
+        self.turn_floor_base = floor_base
+        self.lookahead_m = look
 
     def _smooth(self, line: LineGeometry) -> None:
         a = LINE_EMA_ALPHA
@@ -201,7 +218,7 @@ class LineController:
         # rate needed is curvature * speed, and in PWM units that is
         # omega = kappa * v * wheel_base / 2, so the turn scales with speed
         # and the loop stays stable from creeping to full speed.
-        dist = line.look_dist_m if line.look_dist_m > 0.2 else LOOKAHEAD_M
+        dist = line.look_dist_m if line.look_dist_m > 0.2 else self.lookahead_m
         y = self._look
         kappa = PURSUIT_GAIN * 2.0 * y / (dist * dist + y * y)
         # The near-offset and trim terms add loop gain; the camera delay is
@@ -293,7 +310,8 @@ class LineController:
             # The floor starts small and grows only while the tracking monitor
             # sees the error NOT shrinking (steering too weak for this chassis).
             k = (boost - 1.0) / max(TRACK_BOOST_MAX - 1.0, 1e-6)
-            floor = (TURN_FLOOR_BASE + (TURN_FLOOR - TURN_FLOOR_BASE) * min(1.0, k))
+            floor = (self.turn_floor_base
+                     + (TURN_FLOOR - self.turn_floor_base) * min(1.0, k))
             cap_v = max(8.0, v * scale) if k < 0.25 else TURN_FLOOR   # a stuck rover may pivot
             floor = (min(floor, cap_v)
                      * min(1.0, abs(err) / TURN_FLOOR_FULL_ERR_M))

@@ -126,6 +126,11 @@ def build_homography(width: int, height: int) -> np.ndarray:
 
 class Vision:
     def __init__(self) -> None:
+        # How far ahead of the rover the line is sampled (metres). This is
+        # the pure-pursuit lookahead: a short one tracks the centre tightly but
+        # is noisier, a long one is smooth but rides off-centre. Pushed from the
+        # dashboard each tick; the config constant is the default.
+        self.lookahead_m = LOOKAHEAD_M
         self.bev_w = int(round(2 * BEV_X_HALF_M * BEV_PX_PER_M))
         self.bev_h = int(round((BEV_Y_FAR_M - BEV_Y_NEAR_M) * BEV_PX_PER_M))
         self._size: Optional[tuple] = None
@@ -432,7 +437,7 @@ class Vision:
             slope = max(-6.7, min(6.7, ax / max(ay, 1e-3)))
         half = 0.5 * curvature
         fit = lambda y: cx + slope * (y - cy) + half * (y - cy) ** 2
-        look_y = min(LOOKAHEAD_M, info['y_max'])
+        look_y = min(self.lookahead_m, info['y_max'])
         y_lo = info['y_min']
         y_ref = LINE_REF_Y_M
         self._prev_off, self._prev_t = float(fit(y_ref)), time.monotonic()

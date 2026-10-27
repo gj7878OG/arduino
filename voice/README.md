@@ -172,7 +172,10 @@ success/failure.
 | `intent.py` | `Intent` + the validator (prompt-injection defence) |
 | `explain.py` | Gemini narrator; returns `str`, never an `Intent` |
 | `_constants.py` | All thresholds and vocabulary |
-| `run_phase0.py` | CLI for the narration stack |
+| `run_phase0.py` | CLI for the narration stack (`--no-faces` turns the camera link off) |
+| `cam_lookup.py` | reads `cam_faces.json`, asks the camera to look (`cam_watch.json`) |
+| `face_watcher.py` | unprompted greetings for opted-in, recognised people |
+| `speaker.py` | one speaker for all threads; safety speech outranks greetings |
 
 ### Why `explain.py` can never control the robot
 
@@ -208,6 +211,22 @@ the narrator is a known gap.
 
 ---
 
+## Camera link (who the rover can see)
+
+The dashboard process writes `cam_faces.json` (names, a stability flag, greetings of
+people who opted in; mode 0600) and the voice process reads it. The other direction is
+`cam_watch.json`: the rover asks the camera to wake for a few seconds. Files, not sockets
+or imports, like everything else here. Full plan and measurements:
+`docs/cam-voice-integration-plan.md`; the naming rule: `PERSONA.md` "People and names".
+
+* **Greeting** (`face_watcher.py`): off unless the dashboard's Greeter switch is on and
+  the person opted in; needs a stable identity above the greeter's similarity bar; per-person
+  cooldown; one greeting per 10 s; dropped if a safety announcement just spoke.
+* **Dashboard buttons** (`command.py` verbs `announce_who`, `call_person`): say who is in
+  view, or call a named, enrolled person. Fixed templates only.
+* **Honest when blind**: an offline or stale camera is `"I can't see right now."`.
+* The Voice tab gets a `faces` lane when this is enabled.
+
 ## Not yet built
 
 - `intents.py` — the rules engine (the blocker)
@@ -216,3 +235,4 @@ the narrator is a known gap.
 - `wake.py` — wake word
 - `phrases/*.wav` — the 10 canonical pre-baked phrases. The directory is
   empty, so **Tarka can only speak text via Deepgram right now.**
+- A spoken `"who is there?"` (needs the wake word, listen loop and rules engine; the dashboard buttons cover it for now)

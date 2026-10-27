@@ -12,12 +12,13 @@ Build **neither pure**. Build a **two-lane intent dispatcher**:
 
 Plus, always on:
 
-- Wake word (`wake.py`) and STT (`stt.py`) for *incoming* speech.
-- Persona + TTS (`persona.py`, `tts.py`) for *outgoing* speech.
-- A confirmation gate (`dialogue.py`) so every motion command gets a spoken
-  echo before wheels turn.
-- Voice-side safety (`safety.py`) so LiDAR / camera obstacle state *always*
-  overrides voice.
+- Incoming speech: `mic.py` → `stt.py`, with the listen/answer turn in `ask.py`.
+- Outgoing speech: `persona.py` + `tts.py`, assembled by `respond.py` into a
+  `speech_plan.py` plan.
+- Safety: **there is no voice-side safety layer, deliberately.** The rover's own
+  LiDAR override (`agv_drive_arduino.py`) is the last word before the motor
+  command in *every* mode and can only subtract speed, so a spoken command
+  cannot outrank it — see "Still not built" below.
 
 The voice package writes to `control_state.py` exactly the way `web.py`
 does. There is no second path to the motors.
@@ -66,15 +67,42 @@ parser. So make it one from the start.
 
 | Module | Concern | Where it sits |
 |---|---|---|
-| `wake.py` | wake-word listener, always-on, low power | Jetson, foreground |
-| `stt.py` | Whisper.cpp wrapper with VAD | Jetson, on-demand |
-| `intents.py` | rules engine: motion, status, query, safety | primary lane |
-| `agent.py` | optional LLM-as-parser, returns JSON, no motors | secondary lane |
-| `dialogue.py` | turn-taking, confirm gate, slot fill, clarification | owns session state |
-| `safety.py` | voice-side clamps, mute, LiDAR override, "queue not drop" | wraps `dialogue` |
-| `tts.py` | Piper wrapper, pre-baked phrase cache | Jetson |
-| `persona.py` | renders persona-appropriate utterances from intents + state | pure |
+| `run_phase0.py` | the runner. Phase 0 is TTS-only — no mic, no control writes | Jetson, foreground |
+| `mic.py` | capture from the Logitech C270 (a UAC device, not a webcam) | Jetson, foreground |
+| `speaker.py` | one speaker for every thread, arbitrated by priority | Jetson, foreground |
+| `stt.py` | speech-to-text: Deepgram primary, Google Cloud STT v2 fallback | Jetson, on-demand |
+| `intents.py` | rules engine — the primary command lane, transcript → `Intent` | primary lane |
+| `agent.py` | LLM-as-parser lane; optional fallback for rules misses | secondary lane |
+| `intent.py` | the `Intent` contract both lanes return | pure |
+| `command.py` | the dashboard Voice tab's diagnostic command listener | primary lane |
+| `ask.py` | "Ask Tarka": mic → STT → answer, spoken aloud | owns session state |
+| `event_watcher.py` | watches the project's telemetry JSONs, emits persona events | the only file reader |
+| `face_watcher.py` | greets people the camera recognises — unprompted, so strict | primary lane |
+| `cam_lookup.py` | reads `cam_faces.json`; asks the camera where a person is | read + request |
+| `notes.py` | keeps the last few mic captures so a caller can play them back | pure |
+| `rover_state.py` | reads the rover's published state; read-only, never raises | pure |
+| `explain.py` | Gemini as narrator: a validated event → a sentence | on-demand |
+| `respond.py` | `(Interpretation, RoverState) -> Plan` | pure |
+| `speech_plan.py` | a sentence assembled from cached clips, with a live fallback | pure |
+| `persona.py` | Tarka's utterances from events + state; owns Tarka's voice | pure |
+| `tts.py` | phrase cache + playback + optional Piper synthesis | Jetson |
+| `output.py` | which speaker to talk out of, chosen from the dashboard | Jetson |
+| `status.py` | publishes `voice_status.json` for the Voice tab (sibling of `lidar/publisher.py`) | Jetson |
+| `telemetry.py` | bounded in-memory records + thin wrappers; feeds the Latency card | pure |
+| `vocab.py` | spoken building blocks that are *not* persona events (numbers, units, openers) | shared |
 | `_constants.py` | thresholds, command vocab, persona name | shared |
+| `record_phrases.py` | records Tarka's fixed phrases into the cache | offline |
+| `voice_check.py` | guided STT check: say each phrase, see what Tarka heard | offline |
+
+`wake.py`, `dialogue.py` and `safety.py` are **not** modules: the wake word, the
+turn-taking and the clamps live inside `run_phase0.py`, `command.py` and
+`speech_plan.py`, which is where the phases below say they land. Split them out
+only when there is a second thing to keep apart.
+
+> `web.py` never imports `voice` — the voice stack is a separate process
+> because it owns the C270's ALSA device, which is exclusive. The two sides meet
+> at `voice_status.json` (voice → dashboard, read-only) and
+> `voice_command.json` (dashboard → voice, a two-verb diagnostic inbox).
 
 All imports from the package, never from submodules:
 
@@ -87,7 +115,7 @@ from voice import VoiceLoop, Intent, Persona
 ## Flow
 
 ```
-operator ──► wake.py ──► stt.py ──► text
+operator ──► mic.py ──► stt.py ──► text
                                   ▼
                           intents.match(text)  ──┐
                                   │             │
@@ -203,3 +231,29 @@ Latency moved from a design consideration to **the** design
 consideration. The rules engine is no longer a nice-to-have; it is the
 only reason voice will be usable. It should be built next, before any
 further work on the LLM lane.
+
+---
+
+## Addendum — rules engine and phrase cache built (2026-10-22)
+
+`voice/intents.py` is the primary command lane, as this document argued it
+should be. Measured on real Deepgram transcripts: **0.15–1.3 ms** per
+decision, against **6,600–23,400 ms** for the Gemini lane. It emits the same
+`Intent` and goes through the same `validate_intent` gate.
+
+Policy, in priority order: a stop word anywhere wins (even in a longer
+command); anything that sounds like disabling safety, overriding, or
+switching systems is refused with the "use the dashboard" line and is
+**never** passed to the LLM; an utterance is understood completely or not at
+all (one unknown word → `none` → LLM fallback); a missing distance, direction
+or angle becomes a spoken question, never a guess. Of the 20 phrases in the
+guided check script, 15 are decided by rules alone.
+
+`voice/phrases/` now holds 20 recorded clips (see its README): every
+fixed-text phrase, generated with `python -m voice.record_phrases`. They play
+with no network. Events with a live slot are deliberately not cached.
+
+Still not built: the spoken confirmation gate (a spoken echo before wheels
+turn) and any link from an `Intent` to `control_state`. The rules engine
+*interprets*; it cannot move the rover. That is the intended end state — the
+only path to the motors is the dashboard, behind its password.

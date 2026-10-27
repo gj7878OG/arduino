@@ -179,6 +179,8 @@
     dialog#login-dlg { border: 1px solid #344054; border-radius: 14px; background: #19212c; color: #e8edf4; padding: 1.4rem 1.5rem; width: min(92vw, 380px); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
     dialog#login-dlg::backdrop { background: rgba(0,0,0,.6); }
     dialog#login-dlg h3 { margin: 0 0 .3rem; font-size: 1.05rem; }
+    dialog#rec-done { border: 1px solid #344054; border-radius: 14px; background: #19212c; color: #e8edf4; padding: 1.4rem 1.5rem; width: min(94vw, 560px); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+    dialog#rec-done::backdrop { background: rgba(0,0,0,.6); }
     dialog#login-dlg p { margin: 0 0 .9rem; color: #93a2b8; font-size: .82rem; }
     dialog#login-dlg input { width: 100%; padding: .75rem .9rem; border-radius: 10px; border: 2px solid #344054; background: #0b0f15; color: #e8edf4; font: 600 1.05rem/1 ui-monospace, monospace; }
     dialog#login-dlg .err { color: #f87171; font-size: .8rem; min-height: 1.1rem; margin: .4rem 0 .6rem; }
@@ -201,6 +203,7 @@
     .tabpanel { animation: tab-in .15s ease-out; }
     {% include '_lidar_tab.css' %}
     {% include '_cam_tab.css' %}
+    {% include '_voice_tab.css' %}
     @keyframes tab-in { from { opacity: 0; } to { opacity: 1; } }
     .tabdot.rec { background: #ef4444; animation: recblink 1s steps(2, start) infinite; }
     @keyframes recblink { to { visibility: hidden; } }
@@ -281,7 +284,7 @@
     <div class="chip" id="sum-cam"><span class="k">Camera</span><span class="v">—</span></div>
     <div class="chip" id="sum-usbcam"><span class="k">USB cam</span><span class="v">—</span></div>
     <div class="chip" id="sum-lidar"><span class="k">LiDAR</span><span class="v">—</span></div>
-    <div class="chip" id="sum-rec"><span class="k">Recording</span><span class="v"><button type="button" id="rec-quick" class="mini" style="padding:.2rem .6rem;font-size:.75rem">● Record</button> <button type="button" id="rec-quick-mark" class="mini go" style="padding:.2rem .6rem;font-size:.75rem" hidden>⚑ Mark</button></span></div>
+    <div class="chip" id="sum-rec"><span class="k">Recording</span><span class="v">—</span></div>
   </div>
   <dialog id="login-dlg">
     <form id="login-form" method="dialog" autocomplete="off">
@@ -387,34 +390,19 @@
     </section>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Dashboard sections">
       <button type="button" role="tab" data-tab="drive" id="tabbtn-drive" aria-controls="tab-drive" aria-selected="true">Drive</button>
-      <button type="button" role="tab" data-tab="chassis" id="tabbtn-chassis" aria-controls="tab-chassis" aria-selected="false">Chassis &amp; encoders<i class="tabdot" id="dot-chassis"></i></button>
-      <button type="button" role="tab" data-tab="test" id="tabbtn-test" aria-controls="tab-test" aria-selected="false">Motor test</button>
+      <button type="button" role="tab" data-tab="bench" id="tabbtn-bench" aria-controls="tab-bench" aria-selected="false">Bench<i class="tabdot" id="dot-bench"></i></button>
       <button type="button" role="tab" data-tab="record" id="tabbtn-record" aria-controls="tab-record" aria-selected="false">Record<i class="tabdot rec" id="dot-record"></i></button>
       <button type="button" role="tab" data-tab="lidar" id="tabbtn-lidar" aria-controls="tab-lidar" aria-selected="false">LiDAR<i class="tabdot" id="dot-lidar"></i></button>
       <button type="button" role="tab" data-tab="cam" id="tabbtn-cam" aria-controls="tab-cam" aria-selected="false">Camera<i class="tabdot" id="dot-cam"></i></button>
+      <button type="button" role="tab" data-tab="voice" id="tabbtn-voice" aria-controls="tab-voice" aria-selected="false">Voice<i class="tabdot" id="dot-voice"></i></button>
       <button type="button" role="tab" data-tab="logs" id="tabbtn-logs" aria-controls="tab-logs" aria-selected="false">Logs &amp; system<i class="tabdot" id="dot-logs"></i></button>
     </nav>
     <div class="tabpanel grid" id="tab-drive" role="tabpanel" aria-labelledby="tabbtn-drive">
-      <div class="stack">
-      <section class="card nocollapse">
+      <div class="stack"><section class="card nocollapse">
         <h2>Annotated camera <span id="backend-label" class="backend"></span></h2>
         <img class="video" src="{{ url_for('video_feed') }}" alt="Live annotated camera stream">
       </section>
-      <section class="card">
-        <h2>Max speed · master limit</h2>
-        <div class="speed">
-          <div class="speed-row">
-            <input id="speed-range" type="range" min="{{ project_config.SPEED_MIN_PCT }}" max="{{ project_config.SPEED_MAX_PCT }}" step="5" value="{{ project_config.DEFAULT_SPEED_PCT }}" aria-label="Max speed percent">
-            <span id="speed-val" class="big">—</span>
-          </div>
-          <span class="applied" id="speed-applied">applied: —</span>
-          <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer"><input type="checkbox" id="obst-toggle" checked> <span id="obst-label">Obstacle stop enforced (camera)</span></label>
-          <p class="note">Every other speed (line following, curves, caution, obstacle slow-down, turning, search) is scaled by this value. Changes ramp in smoothly and take effect immediately, also while driving.</p>
-        </div>
-      </section>
-      </div>
-      <div class="stack">
-      <section class="card">
+<section class="card">
         <h2>Vehicle state</h2>
         <!-- Big human-readable guidance chip. Updates from the same
              /status JSON as the rest of the page; class swap drives
@@ -424,15 +412,9 @@
           <span class="guidance-text" id="g-text">GO FORWARD</span>
         </div>
         <div class="stats">
-          <div class="stat"><span class="label">Camera direction</span><span id="direction" class="value">—</span></div>
           <div class="stat"><span class="label">Camera command (compact)</span><span id="camera-command" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
-          <div class="stat"><span class="label">Camera connection</span><span id="camera-link" class="value device">—</span></div>
-          <div class="stat"><span class="label">Obstacle (camera)</span><span id="lidar" class="value">—</span><div id="lidar-error" class="sub-error"></div></div>
-          <div class="stat"><span class="label">Obstacle detector</span><span id="lidar-link" class="value device">—</span></div>
-          <div class="stat"><span class="label">Obstacle nearest edge</span><span id="distance" class="value">—</span></div>
-          <div class="stat"><span class="label">Arduino link (ACK)</span><span id="stm32-link" class="value device">—</span></div>
+          <div class="stat"><span class="label">Obstacle nearest edge</span><span id="distance" class="value">—</span><div id="lidar-error" class="sub-error"></div></div>
 
-          <div class="stat"><span class="label">Line tracking (is it getting on the line?)</span><span id="track" class="value">—</span></div>
           <div class="stat"><span class="label">Line offset</span><span id="line-offset" class="value">—</span></div>
           <div class="stat"><span class="label">Line angle</span><span id="line-angle" class="value">—</span></div>
           <div class="stat"><span class="label">Lookahead error</span><span id="line-look" class="value">—</span></div>
@@ -442,9 +424,76 @@
           <div class="stat" style="background: #1e3a8a;"><span class="label" style="color: #bfdbfe;">Final Motor Command</span><span id="command" class="value" style="color: white; font-weight: bold;">—</span></div>
           <div class="stat" style="background: #1e3a8a;"><span class="label" style="color: #bfdbfe;">Active Decision (Why it's moving)</span><span id="decision-reason" class="value" style="color: white; font-size: 0.95rem;">—</span></div>
         </div>
+        <p class="hint">Camera direction, both camera links, the Arduino link and the line-tracking verdict are in the strip above, so they are on screen from every tab. This card carries what the strip does not show: the geometry and the reason the rover is moving the way it is.</p>
         <p class="hint">The motors only run while the switch above is ON. The Arduino link is alive only while its <code>ACK2</code> replies keep arriving (dead after <code>{{ project_config.ARDUINO_ACK_TIMEOUT_MS }}</code> ms).</p>
       </section>
+<section class="card">
+        <h2>Max speed · master limit</h2>
+        <div class="speed">
+          <div class="speed-row">
+            <input id="speed-range" type="range" min="{{ project_config.SPEED_MIN_PCT }}" max="{{ project_config.SPEED_MAX_PCT }}" step="5" value="{{ project_config.DEFAULT_SPEED_PCT }}" data-cap="{{ project_config.DEFAULT_SPEED_PCT }}" aria-label="Max speed percent">
+            <span id="speed-val" class="big">—</span>
+          </div>
+          <span class="applied" id="speed-applied">applied: —</span>
+          <p class="note">Every other speed (line following, curves, caution, obstacle slow-down, turning, search) is scaled by this value. Changes ramp in smoothly and take effect immediately, also while driving.</p>
+        </div>
+      </section>
       <section class="card">
+        <h2>Line following &middot; steering tune</h2>
+        <p class="note" style="margin-top:0">Two knobs, and they fix two different complaints. <strong>Min turn</strong> is the &ldquo;get back on the line&rdquo; one: pure pursuit alone asks for only 6&ndash;8&nbsp;PWM when the line is 10&ndash;20&nbsp;cm off centre, which a skid-steer chassis cannot turn with, so the rover drives straight. <strong>Lookahead</strong> is the &ldquo;sit on the centre of it&rdquo; one: short tracks the centre tightly but is noisier, long is smooth but rides off-centre. Both take effect immediately, also while driving.</p>
+        <div class="speed">
+          <div class="speed-row">
+            <input id="floor-range" type="range" min="0" max="40" step="5" value="0" aria-label="Minimum turn authority, PWM per wheel">
+            <span id="floor-val" class="big">—</span>
+          </div>
+          <span class="applied" id="floor-applied">applied: —</span>
+          <p class="note">Minimum turn authority, as a wheel difference in PWM. Below 12&nbsp;cm of error this fades out, so it cannot make the rover weave while it is tracking well. <strong>Bench-test the knee first</strong>: Bench tab &rarr; motor test &rarr; Speed mode &rarr; untick <em>link L&nbsp;=&nbsp;R</em>, then raise L and R until it actually yaws. Set the slider to that difference.</p>
+        </div>
+        <div class="speed">
+          <div class="speed-row">
+            <input id="look-range" type="range" min="0.30" max="1.00" step="0.05" value="{{ project_config.LOOKAHEAD_M }}" aria-label="Lookahead distance in metres">
+            <span id="look-val" class="big">—</span>
+          </div>
+          <span class="applied" id="look-applied">applied: —</span>
+          <p class="note">How far ahead of the rover the line is sampled, in metres. Start at 1.00&nbsp;m and shorten it until it hugs the centre. Shorter reacts faster and overshoots more on a bumpy floor.</p>
+        </div>
+      </section>
+      </div>
+      <div class="stack"><section class="card nocollapse" id="switches-card">
+        <h2>Switches &middot; every on/off setting</h2>
+        <p class="note" style="margin-top:0">Every on/off setting the rover runs on, on the tab you drive from. Each one is the <em>same</em> switch you find on its own tab, not a copy &mdash; tick it here and the one there follows, so the two can never disagree.</p>
+        <div style="display:flex;flex-direction:column;gap:.7rem;align-items:flex-start">
+          <span class="label">Protection &mdash; both sensors can stop the rover</span>
+          <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer">
+            <input type="checkbox" id="obst-toggle" checked> <span id="obst-label">Camera obstacle stop enforced</span>
+          </label>
+          <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer">
+            <input type="checkbox" id="lidar-toggle" checked> <span id="lidar-label">LiDAR obstacle safety armed</span>
+          </label>
+          <p class="note" id="obst-why" style="margin:0">LiDAR zones are tuned in the LiDAR tab. Turning either one off needs the password, and for bench testing only.</p>
+          <span class="label" style="margin-top:.6rem">Wheel control</span>
+          <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer">
+            <input type="checkbox" id="loop-drive"> <span id="loop-drive-label">Closed loop: encoder PID holds wheel speed</span>
+          </label>
+          <p class="note" id="loop-drive-noenc" style="margin:0"></p>
+          <p class="note" style="margin:0">Ticked where you left it: STOP, AUTO and a restart do not re-arm the PID. Untick it to compare the drivers against raw PWM.</p>
+          <span class="label" style="margin-top:.6rem">Recording</span>
+          <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer">
+            <input type="checkbox" id="rec-views-drive"> <span id="rec-views-drive-label">Detector views for every frame</span>
+          </label>
+          <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer">
+            <input type="checkbox" id="rec-auto"> <span id="rec-auto-label">Record every AUTO drive automatically</span>
+          </label>
+          <p class="note" style="margin:0" id="rec-auto-why">Records from the moment you press START in AUTO until you STOP or leave AUTO, then asks whether to keep it. Off by default &mdash; every drive it ticks fills disk.</p>
+          <p class="note" style="margin:0">Locked while a recording runs &mdash; it is read when recording starts.</p>
+        </div>
+        <div style="margin-top:1rem;display:flex;flex-direction:column;gap:.45rem">
+          <button type="button" id="safe-all" style="width:100%">Make everything safe</button>
+          <span class="live" id="safe-all-msg" role="status" aria-live="polite">—</span>
+          <p class="note" style="margin:0">One click for the four things you would otherwise check by hand: camera obstacle stop <b>on</b>, LiDAR <b>on</b>, recording <b>off</b>, wheels <b>zero</b>, and the speed cap pulled back to {{ project_config.DEFAULT_SPEED_PCT }}% if it is above it (rounded down to the slider's step). No password &mdash; every one of these only ever adds protection, so this cannot be used to disarm anything. (A cap you lowered on purpose is left alone.)</p>
+        </div>
+      </section>
+<section class="card">
         <h2>Manual control · test by hand</h2>
         <div class="manual">
           <div class="seg" role="group" aria-label="Drive mode">
@@ -468,9 +517,9 @@
       </section>
       </div>
     </div>
-    <div class="tabpanel grid single" id="tab-chassis" role="tabpanel" aria-labelledby="tabbtn-chassis" hidden>
-      <section class="card" id="chassis-card">
-        <h2>Chassis · wheel speed &amp; encoder PID <span id="loop-chip" class="pill" style="margin-left:.5rem">—</span></h2>
+    <div class="tabpanel grid single" id="tab-bench" role="tabpanel" aria-labelledby="tabbtn-bench" hidden>
+      <section class="card" id="bench-card">
+        <h2>Bench · wheel speed, encoder PID &amp; per-driver test <span id="loop-chip" class="pill" style="margin-left:.5rem">—</span></h2>
         <div class="chassis">
           <div class="ch-side-panel">
             <div class="ch-stats">
@@ -484,59 +533,9 @@
             <label class="applied" style="display:flex;gap:.6rem;align-items:center;cursor:pointer">
               <input type="checkbox" id="loop-toggle" checked> <span id="loop-label">Closed loop: encoder PID holds wheel speed</span>
             </label>
+            <p class="note" id="loop-noenc" style="margin:.2rem 0 0"></p>
           </div>
         </div>
-        <div class="chart-wrap">
-          <canvas class="speed-chart" width="900" height="220" aria-label="Wheel speed target versus measured, last 12 seconds"></canvas>
-          <div class="legend"><span><i style="border-color:#60a5fa"></i>Left measured</span><span><i class="dash" style="border-color:#60a5fa"></i>Left target</span><span><i style="border-color:#fb923c"></i>Right measured</span><span><i class="dash" style="border-color:#fb923c"></i>Right target</span></div>
-        </div>
-        <div class="manual">
-          <div class="rowline">
-            <label for="test-pct" class="label" style="margin:0">Test power</label>
-            <input id="test-pct" type="range" min="10" max="100" step="5" value="40" style="flex:1;accent-color:#60a5fa">
-            <span id="test-pct-val" class="mono">40%</span>
-          </div>
-          <div class="testbtns" id="testbtns">
-            <button type="button" data-l="1" data-r="0">Left side</button>
-            <button type="button" data-l="0" data-r="1">Right side</button>
-            <button type="button" data-l="1" data-r="1">Both ▲</button>
-            <button type="button" data-l="-1" data-r="-1">Both ▼</button>
-            <button type="button" data-l="-1" data-r="1">Pivot ⟲</button>
-            <button type="button" data-l="1" data-r="-1">Pivot ⟳</button>
-            <button type="button" id="step-test" class="steptest">Step test 3 s</button>
-          </div>
-          <div id="step-result" class="live">step test: —</div>
-          <p class="note">Hold a button (or press and hold a wheel pair in the drawing) to run exactly that side. Needs MANUAL mode and START. Test power is a share of the Max speed slider. <b>Step test</b> drives both sides for 3 s and reports rise time and steady-state error. Untick the closed-loop box to compare with raw PWM. Wheels turn in the drawing at the measured speed; without encoder data the drawing shows the commanded speed.</p>
-        </div>
-      </section>
-      <section class="card">
-        <h2>Arduino · motor link</h2>
-        <div class="stats">
-          <div class="stat"><span class="label">Firmware protocol</span><span id="fw-version" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
-          <div class="stat"><span class="label">ACK age</span><span id="ack-age" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
-          <div class="stat"><span class="label">Encoder L (ticks)</span><span id="enc-left" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
-          <div class="stat"><span class="label">Encoder R (ticks)</span><span id="enc-right" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
-        </div>
-        <div class="enc-tools">
-          <h3>Encoder check &amp; calibration</h3>
-          <div class="stats" style="padding:0">
-            <div class="stat"><span class="label">Since zero · L ticks / R ticks</span><span id="et-ticks" class="value mono">—</span></div>
-            <div class="stat"><span class="label">Distance since zero (L · R)</span><span id="et-dist" class="value mono">—</span></div>
-          </div>
-          <div class="rowline" style="flex-wrap:wrap">
-            <button type="button" class="mini" id="et-zero">Zero counts</button>
-            <label class="label" style="margin:0" for="et-rolled">I rolled the rover</label>
-            <input id="et-rolled" type="number" min="0.05" step="0.05" value="1.00" style="width:5.5rem;background:#0b0f15;color:#e8edf4;border:2px solid #344054;border-radius:10px;padding:.4rem">
-            <span class="mono">m</span>
-          </div>
-          <div id="et-result" class="live">calibration: press Zero, roll the rover a known distance by hand (motors OFF), enter it above</div>
-        </div>
-        <p class="hint">Ticks are signed edge counts of encoder channel A (2 per pulse) since the Arduino booted; forward counts up. Firmware v3 reports them with every ACK.</p>
-      </section>
-    </div>
-    <div class="tabpanel grid single" id="tab-test" role="tabpanel" aria-labelledby="tabbtn-test" hidden>
-      <section class="card" id="dtest-card">
-        <h2>Motor driver test · each side on its own</h2>
         <div class="chart-wrap">
           <canvas class="speed-chart" width="900" height="220" aria-label="Wheel speed target versus measured, last 12 seconds"></canvas>
           <div class="legend"><span><i style="border-color:#60a5fa"></i>Left measured</span><span><i class="dash" style="border-color:#60a5fa"></i>Left target</span><span><i style="border-color:#fb923c"></i>Right measured</span><span><i class="dash" style="border-color:#fb923c"></i>Right target</span></div>
@@ -579,8 +578,42 @@
             <button type="button" class="mini go" id="dt-ramp">Ramp 0 → 100 → 0 %</button>
             <button type="button" class="mini reset" id="dt-reset">RESET to zero + normal</button>
           </div>
-          <p class="note">Speed mode: the value is a share of the Max speed slider and the encoder PID holds it. Raw PWM mode: 100 % = PWM 255 and the card shows the actual PWM number (direction from the sign), without PID or speed cap; it is still ramped by the jerk limiter and the Arduino slew limit. The test only runs in MANUAL with the motors ON, and the browser must stay open: closing the tab or losing Wi-Fi stops it within half a second. <b>Everything resets automatically</b> when you press AUTO or STOP (values to 0, closed loop back ON), so the real line-following run never starts from a test setting.</p>
+          <p class="note">Speed mode: the value is a share of the Max speed slider and the encoder PID holds it. Raw PWM mode: 100 % = PWM 255 and the card shows the actual PWM number (direction from the sign), without PID or speed cap; it is still ramped by the jerk limiter and the Arduino slew limit. The test only runs in MANUAL with the motors ON, and the browser must stay open: closing the tab or losing Wi-Fi stops it within half a second. The sliders above are the one place to drive a side; the chassis drawing at the top of the page does the same thing by hold. <b>Test values reset to zero</b> when you press AUTO or STOP, so the real line-following run never starts from a test setting.</p>
         </div>
+        <div class="manual">
+          <div class="testbtns" style="align-items:center">
+            <label for="test-pct" class="label" style="margin:0">Test power</label>
+            <input id="test-pct" type="range" min="10" max="100" step="5" value="40" style="width:10rem;accent-color:#60a5fa">
+            <span id="test-pct-val" class="mono">40%</span>
+            <button type="button" id="step-test" class="steptest">Step test 3 s</button>
+          </div>
+          <div id="step-result" class="live">step test: —</div>
+          <p class="note"><b>Test power</b> is the share of full output the step test and the hold-to-spin wheel pairs in the chassis drawing use. <b>Step test</b> drives both sides for 3 s and reports rise time and steady-state error against the encoders. Needs MANUAL mode and the motors ON.</p>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Arduino · motor link</h2>
+        <div class="stats">
+          <div class="stat"><span class="label">Firmware protocol</span><span id="fw-version" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
+          <div class="stat"><span class="label">ACK age</span><span id="ack-age" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
+          <div class="stat"><span class="label">Encoder L (ticks)</span><span id="enc-left" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
+          <div class="stat"><span class="label">Encoder R (ticks)</span><span id="enc-right" class="value" style="font-family: ui-monospace, monospace;">—</span></div>
+        </div>
+        <div class="enc-tools">
+          <h3>Encoder check &amp; calibration</h3>
+          <div class="stats" style="padding:0">
+            <div class="stat"><span class="label">Since zero · L ticks / R ticks</span><span id="et-ticks" class="value mono">—</span></div>
+            <div class="stat"><span class="label">Distance since zero (L · R)</span><span id="et-dist" class="value mono">—</span></div>
+          </div>
+          <div class="rowline" style="flex-wrap:wrap">
+            <button type="button" class="mini" id="et-zero">Zero counts</button>
+            <label class="label" style="margin:0" for="et-rolled">I rolled the rover</label>
+            <input id="et-rolled" type="number" min="0.05" step="0.05" value="1.00" style="width:5.5rem;background:#0b0f15;color:#e8edf4;border:2px solid #344054;border-radius:10px;padding:.4rem">
+            <span class="mono">m</span>
+          </div>
+          <div id="et-result" class="live">calibration: press Zero, roll the rover a known distance by hand (motors OFF), enter it above</div>
+        </div>
+        <p class="hint">Ticks are signed edge counts of encoder channel A (2 per pulse) since the Arduino booted; forward counts up. Firmware v3 reports them with every ACK.</p>
       </section>
     </div>
     <div class="tabpanel grid single" id="tab-record" role="tabpanel" aria-labelledby="tabbtn-record" hidden>
@@ -598,7 +631,7 @@
             <select id="rec-rate" style="background:#0b0f15;color:#e8edf4;border:2px solid #344054;border-radius:10px;padding:.45rem">
               <option value="1">1</option><option value="2">2</option><option value="5" selected>5</option><option value="10">10</option><option value="30">30 (every frame)</option>
             </select>
-            <label class="applied" style="display:flex;gap:.4rem;align-items:center;cursor:pointer"><input type="checkbox" id="rec-views"> detector views for every frame</label>
+            <label class="applied" style="display:flex;gap:.4rem;align-items:center;cursor:pointer"><input type="checkbox" id="rec-views"> <span id="rec-views-label">Detector views for every frame</span></label>
           </div>
           <div class="rowline" style="flex-wrap:wrap">
             <input id="rec-note" type="text" maxlength="120" placeholder="what was wrong? (optional note)" style="flex:1;min-width:14rem;background:#0b0f15;color:#e8edf4;border:2px solid #344054;border-radius:10px;padding:.6rem .8rem">
@@ -624,6 +657,7 @@
     </div>
     {% include '_lidar_tab.html' %}
     {% include '_cam_tab.html' %}
+    {% include '_voice_tab.html' %}
     <div class="tabpanel grid" id="tab-logs" role="tabpanel" aria-labelledby="tabbtn-logs" hidden>
       <section class="card">
         <h2>Sensor probes · startup wiring check</h2>
@@ -730,17 +764,55 @@
       </section>
     </div>
   </main>
+    <!-- Recording finished. A native <dialog> so Esc, the backdrop and the
+       focus trap come for free — and every one of those routes to "keep",
+       because the frames are already on disk and losing a drive to a
+       mis-click would be the worse failure. Delete is the only irreversible
+       choice here, so it is the one that is not the default. -->
+  <dialog id="rec-done" aria-labelledby="rec-done-title">
+    <div class="card nocollapse" style="margin:0;border:0">
+      <h2 id="rec-done-title" style="margin-top:0">Drive recorded</h2>
+      <div class="ch-stats" style="grid-template-columns:repeat(auto-fit,minmax(8rem,1fr))">
+        <div class="stat"><span class="label">Session</span><span id="rd-session" class="value mono" style="font-size:.95rem">—</span></div>
+        <div class="stat"><span class="label">Frames</span><span id="rd-frames" class="value mono">—</span></div>
+        <div class="stat"><span class="label">Problems · marks</span><span id="rd-flags" class="value mono">—</span></div>
+        <div class="stat"><span class="label">Size · length</span><span id="rd-size" class="value mono" style="font-size:.95rem">—</span></div>
+      </div>
+      <p class="note" id="rec-done-why" style="margin-bottom:0">Nothing was thrown away: the frames are already written to <code>recordings/</code>. Keep it, or delete the folder and the disk goes straight back.</p>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem">
+        <button type="button" class="startbtn" id="rd-keep" style="flex:1">Keep it</button>
+        <button type="button" class="dl" id="rd-review">Review</button>
+        <button type="button" class="stopbtn" id="rd-del">Delete it</button>
+      </div>
+    </div>
+  </dialog>
+
   <script>
     let lastLogId = 0;
     const $ = (id) => document.getElementById(id);
 
+    // ── Camera tab dot ──────────────────────────────────────────────
+    // The Camera tab carries both cameras: the AGV pipeline's own sensor,
+    // whose verdict arrives with telemetry, and the USB preview, whose verdict
+    // comes from /cam/status in _cam_tab.js. Two places therefore write this
+    // dot, and the worse of the two wins — a tab that is only partly working
+    // is a tab the operator should be able to find from any other one.
+    // Declared up here, before the partials are included, so both can call it.
+    const _camVerdict = { agv: null, usb: null };
+    function camDot(which, ok) {
+      _camVerdict[which] = ok;
+      const dot = $('dot-cam');
+      if (dot) dot.className = 'tabdot'
+        + (_camVerdict.agv === false || _camVerdict.usb === false ? ' on' : '');
+    }
+
     // ── Sign-in session: access + refresh tokens kept across page reloads ──
-    // Tokens live in localStorage with their ABSOLUTE expiry times, so a reload
-    // neither signs you out nor resets the clock. The access token is short
-    // lived and refreshed in the background; the refresh token has a fixed
-    // lifetime on the server and is not extended by use.
-    // KEEP IN SYNC with templates/_auth_core.js (review.html uses that copy).
-    const AUTH_KEY = 'agv-auth';
+    // The session object itself is shared with review.html; see
+    // templates/_auth_core.js. Tokens live in localStorage with their ABSOLUTE
+    // expiry times, so a reload neither signs you out nor resets the clock. The
+    // access token is short lived and refreshed in the background; the refresh
+    // token has a fixed lifetime on the server and is not extended by use.
+    {% include '_auth_core.js' %}
     function toast(msg, kind = 'info', ms = 4200) {
       const box = $('toasts');
       if ([...box.children].some(t => t.textContent === msg)) return;   // no duplicates
@@ -749,60 +821,6 @@
       box.appendChild(t);
       setTimeout(() => t.remove(), ms);
     }
-    const Auth = {
-      data: null,                                   // {access, refresh, accessExp, refreshExp} (ms epoch)
-      load() {
-        try { const d = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); this.data = d && d.refresh ? d : null; }
-        catch (e) { this.data = null; }
-        if (this.data && Date.now() >= this.data.refreshExp) this.data = null;
-      },
-      save() {
-        try { this.data ? localStorage.setItem(AUTH_KEY, JSON.stringify(this.data)) : localStorage.removeItem(AUTH_KEY); }
-        catch (e) { /* private mode: session lives until reload */ }
-      },
-      clear() { this.data = null; this.save(); updateAuthUi(); },
-      accessValid(margin = 0) { return !!this.data && Date.now() < this.data.accessExp - margin; },
-      refreshValid() { return !!this.data && Date.now() < this.data.refreshExp; },
-      headers() { return this.accessValid() ? { Authorization: 'Bearer ' + this.data.access } : {}; },
-      async refresh() {
-        if (!this.refreshValid()) { this.clear(); return false; }
-        try {
-          const r = await fetch('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: this.data.refresh }) });
-          if (r.status === 401) { this.clear(); toast('Session ended - sign in again', 'warn'); return false; }
-          if (!r.ok) return this.accessValid();           // server hiccup: keep what we have
-          const j = await r.json(), now = Date.now();
-          this.data.access = j.access_token;
-          this.data.accessExp = now + j.access_expires_in * 1000;
-          // refreshExp stays as issued at sign-in: using the token never extends it
-          this.save(); updateAuthUi();
-          return true;
-        } catch (e) { return this.accessValid(); }
-      },
-      async ensure() {
-        if (this.accessValid(20000)) return true;
-        if (this.refreshValid()) return (await this.refresh()) && this.accessValid();
-        return false;
-      },
-      async login(password) {
-        const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }) });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) return { ok: false, status: r.status, error: j.error || 'sign-in failed' };
-        const now = Date.now();
-        this.data = { access: j.access_token, refresh: j.refresh_token,
-                      accessExp: now + j.access_expires_in * 1000, refreshExp: now + j.refresh_expires_in * 1000 };
-        this.save(); updateAuthUi();
-        return { ok: true };
-      },
-      async logout() {
-        const rt = this.data && this.data.refresh;
-        this.clear();
-        try { await fetch('/api/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                           body: JSON.stringify({ refresh_token: rt }) }); } catch (e) {}
-      },
-    };
-    Auth.load();
     // POST JSON with the bearer token; on 401 refresh once and retry.
     async function authFetch(url, body, method = 'POST') {
       const go = () => fetch(url, { method, headers: { 'Content-Type': 'application/json', ...Auth.headers() },
@@ -830,6 +848,11 @@
         who.textContent = 'Signed out'; box.className = 'auth'; b.textContent = 'Sign in';
       }
     }
+    // The shared session knows when the tokens change; this page decides what
+    // that looks like. Hooked here rather than wired into the session itself so
+    // review.html can use the same code without a toasts element.
+    Auth.onChange = updateAuthUi;
+    Auth.onLost = (msg) => toast(msg, 'warn');
     let loginResolve = null;
     function openLogin(why) {
       return new Promise((resolve) => {
@@ -862,7 +885,8 @@
       if (Auth.refreshValid()) { await Auth.logout(); toast('Signed out', 'info', 2000); }
       else openLogin();
     });
-    window.addEventListener('storage', (e) => { if (e.key === AUTH_KEY) { Auth.load(); updateAuthUi(); } });
+    // The cross-tab 'storage' listener lives in _auth_core.js, where the session
+    // is; it calls Auth._changed(), which reaches updateAuthUi via onChange.
     // keep the access token fresh, and the "time left" label ticking
     setInterval(() => { if (Auth.refreshValid() && !Auth.accessValid(60000)) Auth.refresh(); }, 15000);
     setInterval(updateAuthUi, 1000);
@@ -877,9 +901,14 @@
     const panelCounts = { SYSTEM: 0, CAMERA: 0, LIDAR: 0, STM32: 0 };
     const PANEL_MAX = 200;
     const EMPTY = '<li class="log-empty">No entries yet.</li>';
-    function setText(id, value) { $(id).textContent = value ?? '—'; }
+    function setText(id, value) {
+      // Null-safe: values the strip already carries are not repeated in the
+      // cards below, so a good half of the ids this is called with are gone.
+      const el = $(id); if (el) el.textContent = value ?? '—';
+    }
     function setConnection(id, connected, fresh, available) {
       const element = $(id);
+      if (!element) return;
       if (!available) {
         element.textContent = 'UNKNOWN';
         element.className = 'value device unknown';
@@ -953,7 +982,7 @@
       dot.title = data.running ? 'AGV control loop running' : 'AGV control loop stopped';
       updatePower(data.enabled, fresh);
       updateSpeed(data.max_speed_pct);
-      updateTrack(data.track_state, data.steer_boost || 1);
+      if (!steerLoaded) { steerLoaded = true; loadSteer(); }
       updateWheels(data);
       updateStrip(data, fresh);
       updateTabDots(data);
@@ -962,7 +991,6 @@
       updateLidarLive(data);
       driveMode = data.mode === 'manual' ? 'manual' : 'auto';
       updateManualUi();
-      setText('direction', data.camera_direction);
       const f2 = (v, u, d=2) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(d)}${u}`);
       setText('line-offset', f2(data.line_offset_m, ' m'));
       setText('line-angle', f2(data.line_angle_deg, '°', 1));
@@ -986,14 +1014,10 @@
       $('guidance').className = 'guidance ' + g.cls;
       $('g-icon').textContent = g.icon;
       $('g-text').textContent = g.text;
-      setConnection('camera-link', data.camera_connected, fresh, typeof data.camera_connected === 'boolean');
-      setText('lidar', data.lidar_status);
+      setText('distance', data.lidar_distance_mm > 0 ? `${Math.round(data.lidar_distance_mm)} mm` : '—');
       const lidarErr = $('lidar-error');
       lidarErr.textContent = data.lidar_error || '';
       lidarErr.style.display = data.lidar_error ? 'block' : 'none';
-      setConnection('lidar-link', data.lidar_connected, fresh, typeof data.lidar_connected === 'boolean');
-      setConnection('stm32-link', data.stm32_connected, fresh, typeof data.stm32_connected === 'boolean');
-      setText('distance', data.lidar_distance_mm > 0 ? `${Math.round(data.lidar_distance_mm)} mm` : '—');
       setText('command', data.final_command);
       setText('decision-reason', data.decision_reason || '—');
       setText('backend-label', data.camera_backend ? `[${data.camera_backend}]` : '');
@@ -1068,6 +1092,64 @@
       }
     }
 
+    // ── Steering tune (min turn + lookahead) ─────────────────────────
+    // Two independent sliders, one POST to /api/steer. Each keeps its own
+    // dragging guard so the applied value can never fight the thumb, and a
+    // short debounce so a drag does not spam the control file.
+    let steerLoaded = false;
+    const steerSliders = [
+      { range: $('floor-range'), val: $('floor-val'), applied: $('floor-applied'), key: 'turn_floor_base', fmt: (v) => `${v} PWM` },
+      { range: $('look-range'), val: $('look-val'), applied: $('look-applied'), key: 'lookahead_m', fmt: (v) => `${Number(v).toFixed(2)} m` },
+    ].filter((s) => s.range);
+    steerSliders.forEach((s) => {
+      let dragging = false, timer = null, setAt = 0;
+      s.range.addEventListener('input', () => {
+        dragging = true;
+        s.val.textContent = s.fmt(s.range.value);
+      });
+      s.range.addEventListener('change', () => {          // on release / keyboard step
+        dragging = false;
+        setAt = Date.now();              // ignore stale echo until it lands
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          fetch('/api/steer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ [s.key]: Number(s.range.value) }) })
+            .then((r) => r.json()).then((d) => applySteer(d)).catch((e) => console.warn('steer failed', e));
+        }, 150);
+      });
+      s.sync = (shown) => {
+        if (shown == null) return;
+        s.applied.textContent = `applied: ${s.fmt(shown)}`;
+        if (!dragging && document.activeElement !== s.range && Date.now() - setAt > 2000) {
+          s.range.value = shown;
+          s.val.textContent = s.fmt(shown);
+        }
+      };
+    });
+    function applySteer(d) {
+      if (!d) return;
+      for (const s of steerSliders) s.sync(d[s.key]);
+    }
+    // Server is the authority for the allowed range (hand-edited control.json
+    // can be clamped), so take min/max from it rather than trusting the markup.
+    function loadSteer() {
+      fetch('/api/steer').then((r) => r.json()).then((d) => {
+        if (!d) return;
+        const bounds = [
+          [d.turn_floor_base_min, d.turn_floor_base_max, 0],
+          [d.lookahead_min_m, d.lookahead_max_m, 0],
+        ];
+        steerSliders.forEach((s, i) => {
+          const b = bounds[i];
+          if (b && b[0] != null) {
+            s.range.min = b[0]; s.range.max = b[1];
+            if (b[2]) s.range.step = b[2];
+          }
+        });
+        applySteer(d);
+      }).catch((e) => console.warn('steer load failed', e));
+    }
+
     // ── Manual control ───────────────────────────────────────────────
     // Hold-to-drive: while a button/key is held we POST {v, w} ~10x/s; the AGV
     // treats a command older than ~0.4 s as released, so closing the tab,
@@ -1088,12 +1170,38 @@
         ? `manual: v=${v >= 0 ? '+' : ''}${v}  turn=${w >= 0 ? '+' : ''}${w}` : 'manual: off';
       if (!force && key === '0,0' && lastSent === '0,0') return;
       lastSent = key;
-      authFetch('/api/manual', { v, w }).catch(() => {});
+      postManual({ v, w });
     }
-    function refreshDrive() {
+    // Every manual command goes out at ~10 Hz, so a refusal has to be reported
+    // once, not ten times a second. A 409 here means the server is refusing to
+    // drive ("switch to MANUAL mode and press START first") — without this the
+    // d-pad would simply look broken.
+    let _manualRefusal = null;
+    async function postManual(body) {
+      try {
+        const r = await authFetch('/api/manual', body);
+        if (r.ok) { _manualRefusal = null; return r; }
+        const why = (await r.json().catch(() => ({}))).error || ('HTTP ' + r.status);
+        if (_manualRefusal !== why) {
+          _manualRefusal = why;
+          toast('Manual command refused: ' + why, 'err', 6000);
+        }
+        return r;
+      } catch (e) {
+        if (_manualRefusal !== 'offline') {
+          _manualRefusal = 'offline';
+          toast('Manual commands are not reaching the dashboard server', 'err', 6000);
+        }
+        return null;
+      }
+    }
+    function paintDpad() {
       document.querySelectorAll('#dpad button[data-dir]').forEach(b => {
         b.classList.toggle('held', held.has(b.dataset.dir));
       });
+    }
+    function refreshDrive() {
+      paintDpad();
       if (held.size && !driveTimer) driveTimer = setInterval(() => sendDrive(true), 100);
       if (!held.size && driveTimer) { clearInterval(driveTimer); driveTimer = null; }
       sendDrive(true);
@@ -1155,12 +1263,6 @@
       ALIGNING:   ['PIVOTING TO ALIGN', '#fbbf24'],
       NO_LINE:    ['NO LINE', '#93a2b8'],
     };
-    function updateTrack(state, boost) {
-      const t = TRACK[state] || TRACK.NO_LINE;
-      const el = $('track');
-      el.textContent = t[0] + (boost > 1.05 ? `  x${boost.toFixed(1)}` : '');
-      el.style.color = t[1];
-    }
     const obstBox = $('obst-toggle');
     let obstSetAt = 0;
     obstBox.addEventListener('change', async () => {
@@ -1180,6 +1282,7 @@
 
     {% include '_lidar_tab.js' %}
     {% include '_cam_tab.js' %}
+    {% include '_voice_tab.js' %}
 
 
     // ── Chassis diagram · wheel speed · tests ────────────────────────
@@ -1228,7 +1331,13 @@
       else if (d.wheel_closed_loop) { chip.textContent = 'CLOSED LOOP · PID'; chip.className = 'pill ok'; }
       else { chip.textContent = 'OPEN LOOP · raw PWM'; chip.className = 'pill warn'; }
       if (Date.now() - loopSetAt > 2000) $('loop-toggle').checked = d.closed_loop_wanted !== false;
-      $('loop-toggle').disabled = !ready;
+      // Never disabled. This is a saved preference, not a live command, so the
+      // operator may set it before the firmware can act on it; what the running
+      // AGV makes of it is said out loud under the box instead.
+      setText('loop-noenc', ready ? '' :
+        'No encoder data from the running firmware (flash firmware v3 on the STM32). ' +
+        'The choice is saved now and applies as soon as the encoders report.');
+      syncLoopDrive();
       // numbers
       const err = (t, m) => (Math.abs(t) < 0.02 ? '—' : `${((m - t) / Math.abs(t) * 100 >= 0 ? '+' : '')}${((m - t) / Math.abs(t) * 100).toFixed(0)}%`);
       setText('cs-l', `${mps(tl)} / ${mps(ml)} m/s`);
@@ -1317,12 +1426,107 @@
         body: JSON.stringify({ closed_loop: e.target.checked }) }).catch(() => {});
     });
 
-    // per-side / pivot tests: hold to run, release to stop (same deadman as the d-pad)
+    // ── one switch, two places ─────────────────────────────────────────
+    // The Drive tab lists every on/off setting together, but the boxes
+    // still live where they are used: the encoder PID on the Bench tab,
+    // detector views on Record. These are not copies — a click on the
+    // Drive one is forwarded to the original, which owns the API call,
+    // the password prompt and its own re-sync from telemetry, and the
+    // original's state is pushed back here. Same switch, one truth.
+    function mirrorSwitch(srcId, dstId, textPairs = []) {
+      const src = $(srcId), dst = $(dstId);
+      if (!src || !dst) return () => {};
+      const srcLabel = src.nextElementSibling;
+      const labels = textPairs.map(([d, s]) => [$(d), $(s)]).filter(([d, s]) => d && s);
+      // the original's label carries the "off" colour; the row's follows it
+      const label = labels.find(([, s]) => s === srcLabel);
+      const sync = () => {
+        if (dst.checked !== src.checked) dst.checked = src.checked;
+        if (dst.disabled !== src.disabled) dst.disabled = src.disabled;
+        for (const [d, s] of labels) d.textContent = s.textContent;
+        if (label && srcLabel) label[0].style.color = srcLabel.style.color;
+      };
+      dst.addEventListener('change', () => {
+        if (src.disabled) { sync(); return; }      // the original is not clickable — do not look armed
+        src.checked = dst.checked;
+        src.dispatchEvent(new Event('change'));    // the original's handler does the API call
+        sync();                                     // ... and may have refused, flipping itself back
+      });
+      src.addEventListener('change', sync);         // operator clicked the original instead
+      sync();
+      return sync;                                  // the telemetry render calls this
+    }
+    // `checked` is a DOM property, not an attribute, so nothing watches it for
+    // us: the render paths below call these after they set the original.
+    const syncLoopDrive = mirrorSwitch('loop-toggle', 'loop-drive',
+      [['loop-drive-label', 'loop-label'], ['loop-drive-noenc', 'loop-noenc']]);
+    const syncRecViews = mirrorSwitch('rec-views', 'rec-views-drive',
+      [['rec-views-drive-label', 'rec-views-label']]);
+
+    // ── "Make everything safe" ──────────────────────────────────────────
+    // The undo for arming the rover, in one click. Every switch on this card
+    // is flipped by dispatching its own change event, so each one goes
+    // through the handler that already owns its API call, its password
+    // prompt and its re-sync from telemetry — this never talks to the
+    // server directly and so cannot drift from what the switches do.
+    //
+    // No password, because it can only ever add protection: turning the
+    // obstacle stop or the LiDAR back ON is ungated on the server by the
+    // same rule that gates turning them OFF (/api/obstacle). The one
+    // judgement call is the speed cap — it is pulled DOWN to the
+    // configured cap and never raised, because a cap the operator lowered
+    // on purpose is already more conservative than the default.
+    async function makeSafe() {
+      const btn = $('safe-all'), msg = $('safe-all-msg');
+      const did = [];
+      btn.disabled = true;
+      try {
+        if (!obstBox.checked) { obstBox.checked = true; obstBox.dispatchEvent(new Event('change')); did.push('camera stop on'); }
+        if (!lidarBox.checked) { lidarBox.checked = true; lidarBox.dispatchEvent(new Event('change')); did.push('LiDAR on'); }
+        if (REC.on) { recStop(); did.push('recording stopped'); }
+        if (motorsOn || held.size) {
+          stopTest();                       // a per-driver test would keep driving
+          // Drop the deadman locally instead of going through refreshDrive(),
+          // which would POST /api/manual — that route is password-gated, and a
+          // button that needs no password must not ask for one. POST
+          // /api/enable {enabled:false} stops the rover and zeroes the stored
+          // manual command anyway, so nothing is left driving either way.
+          held.clear();
+          if (driveTimer) { clearInterval(driveTimer); driveTimer = null; }
+          paintDpad();
+          await setMotors(false);           // STOP is never gated
+          did.push('wheels zeroed, motors told to STOP');
+        }
+        const step = Number(range.step) || 5, lo = Number(range.min) || 0;
+        // The configured cap need not land on the slider's step (59% with a
+        // step of 5), so round *down* to the step below it: the guarantee
+        // this button offers is "never above the configured cap", and
+        // rounding up would quietly break it.
+        const cap = lo + Math.floor((Number(range.dataset.cap) - lo) / step) * step;
+        if (Number(range.value) > cap) {
+          range.value = cap;
+          const pct = Number(range.value);  // ... post what the slider now shows
+          $('speed-val').textContent = `${pct}%`;
+          dragging = false; speedSetAt = Date.now(); clearTimeout(speedTimer);
+          const r = await fetch('/api/speed', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                               body: JSON.stringify({ max_speed_pct: pct }) });
+          if (r.ok) did.push(`speed cap back to ${pct}%`);
+          else { did.push('speed cap NOT changed'); toast('Speed cap not changed', 'err'); }
+        }
+      } finally {
+        btn.disabled = false;
+      }
+      msg.textContent = did.length ? 'safe: ' + did.join(' · ') : 'already safe — nothing to change';
+    }
+    $('safe-all').addEventListener('click', makeSafe);
+
+    // Hold-to-spin on the chassis drawing at the top of the page, and the
+    // step test below: same deadman as the d-pad, stop on release.
     let testTimer = null, testCmd = null, testBtn = null, stepRun = null;
     const testPower = () => Number($('test-pct').value) / 100;
     $('test-pct').addEventListener('input', () => { $('test-pct-val').textContent = `${$('test-pct').value}%`; });
     function postWheels(l, r) {
-      return authFetch('/api/manual', { left: l, right: r }).catch(() => {});
+      return postManual({ left: l, right: r });
     }
     function testTick() {
       if (!manualActive() || !testCmd) return stopTest();
@@ -1342,13 +1546,6 @@
       if (testTimer) { clearInterval(testTimer); testTimer = null; }
       if (had) postWheels(0, 0);
     }
-    document.querySelectorAll('#testbtns button[data-l]').forEach(b => {
-      b.addEventListener('pointerdown', (e) => {
-        e.preventDefault(); b.setPointerCapture(e.pointerId);
-        startTest(Number(b.dataset.l), Number(b.dataset.r), b);
-      });
-      for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, stopTest);
-    });
     document.querySelectorAll('.ch-side').forEach(g => {
       g.addEventListener('pointerdown', (e) => {
         e.preventDefault(); g.setPointerCapture(e.pointerId);
@@ -1432,23 +1629,21 @@
     function dtSend() {
       const can = manualActive();
       const active = DT.l !== 0 || DT.r !== 0;
-      if (!can) { if (active) dtReset(false); return; }
+      if (!can) { if (active) dtReset(); return; }
       if (!active && !DT.sent) return;
-      authFetch('/api/manual', { left: DT.l / 100, right: DT.r / 100, raw: DT.mode === 'raw' }).catch(() => {});
+      postManual({ left: DT.l / 100, right: DT.r / 100, raw: DT.mode === 'raw' });
       DT.sent = active;
     }
     setInterval(dtSend, 100);
     function dtStopRamp() {
       if (DT.ramp) { clearInterval(DT.ramp.timer); DT.ramp = null; $('dt-ramp').textContent = 'Ramp 0 → 100 → 0 %'; }
     }
-    function dtReset(restoreLoop) {
+    function dtReset() {
       dtStopRamp();
       DT.l = DT.r = 0; DT.mode = 'speed';
-      if (restoreLoop) {
-        $('loop-toggle').checked = true; loopSetAt = Date.now();
-        fetch('/api/loop', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ closed_loop: true }) }).catch(() => {});
-      }
+      // The closed-loop tick box is deliberately left alone: it holds the
+      // operator's saved choice (server-side), not the state of a test that
+      // just ended. The next telemetry tick re-syncs it to that choice.
       dtRender();
       dtSend();                                   // one explicit zero
     }
@@ -1465,7 +1660,7 @@
       DT.mode = b.dataset.m; DT.l = DT.r = 0; dtStopRamp(); dtRender();   // never carry a value across modes
     }));
     $('dt-link').addEventListener('change', () => { if ($('dt-link').checked) dtSet('r', DT.l, true); });
-    $('dt-reset').addEventListener('click', () => dtReset(true));
+    $('dt-reset').addEventListener('click', dtReset);
     $('dt-ramp').addEventListener('click', () => {
       if (DT.ramp) { dtStopRamp(); return; }
       if (!manualActive()) return;
@@ -1494,17 +1689,17 @@
     }
     $('dt-enable').addEventListener('click', enableManualAccess);
     $('dk-enable').addEventListener('click', enableManualAccess);
-    $('dk-stop').addEventListener('click', () => { stopTest(); dtReset(true); setMotors(false); });
-    $('dt-stop').addEventListener('click', () => { dtReset(true); setMotors(false); });
-    // leaving MANUAL / STOP / hidden tab: back to zero, normal closed loop
+    $('dk-stop').addEventListener('click', () => { stopTest(); dtReset(); setMotors(false); });
+    $('dt-stop').addEventListener('click', () => { dtReset(); setMotors(false); });
+    // leaving MANUAL / STOP / hidden tab: back to zero
     let dtWasActive = false;
     setInterval(() => {
       const can = manualActive();
-      if (dtWasActive && !can) dtReset(true);
+      if (dtWasActive && !can) dtReset();
       dtWasActive = can;
       dtRender();
     }, 300);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) dtReset(false); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) dtReset(); });
 
 
     function chip(id, text, cls) {
@@ -1514,8 +1709,23 @@
       chip('sum-mode', (d.mode || 'auto').toUpperCase(), d.mode === 'manual' ? 'warn' : '');
       chip('sum-motors', !fresh ? 'NO AGV' : d.enabled ? 'ON' : 'OFF', !fresh ? 'bad' : d.enabled ? 'good' : '');
       const t = TRACK[d.track_state] || TRACK.NO_LINE;
-      chip('sum-line', d.mode === 'manual' ? 'manual' : t[0].split(' - ')[0],
-           d.mode === 'manual' ? '' : (d.track_state === 'ON_LINE' ? 'good' : d.track_state === 'NO_LINE' ? '' : 'warn'));
+      // A steer boost (the rover slowing down to take a tight curve) has no
+      // card of its own, so it rides along on this chip. Written here rather
+      // than patched on afterwards, so it clears itself with the next frame
+      // instead of flashing for one frame.
+      const boost = d.steer_boost || 1;
+      const boosted = d.mode !== 'manual' && boost > 1.05;
+      chip('sum-line',
+           d.mode === 'manual' ? 'manual'
+             : boosted ? `${t[0].split(' - ')[0]} x${boost.toFixed(1)}`
+                       : t[0].split(' - ')[0],
+           d.mode === 'manual' ? ''
+             : boosted ? 'warn'
+             : (d.track_state === 'ON_LINE' ? 'good'
+               : d.track_state === 'NO_LINE' ? '' : 'warn'));
+      $('sum-line').title = boosted
+        ? `steer boost x${boost.toFixed(1)} — easing off to take the curve`
+        : '';
       const ml = d.wheel_meas_l_mps || 0, mr = d.wheel_meas_r_mps || 0;
       chip('sum-wheels', d.fw_closed_ready ? `${mps(ml)} · ${mps(mr)} m/s` : 'no encoders', d.fw_closed_ready ? '' : 'warn');
       chip('sum-ctrl', !d.fw_closed_ready ? 'raw PWM' : d.wheel_closed_loop ? 'PID (encoders)' : 'open loop',
@@ -1524,6 +1734,9 @@
       const ob = d.obstacle_state || 'CLEAR';
       chip('sum-obst', d.obstacle_enforced === false ? 'IGNORED' : ob, d.obstacle_enforced === false ? 'warn' : ob === 'CLEAR' ? 'good' : 'bad');
       chip('sum-cam', d.camera_connected ? 'OK' : 'NONE', d.camera_connected ? 'good' : 'bad');
+      // null means "no verdict yet" (no status.json); only a real false lights
+      // the dot, so a dashboard running on its own is not accused of a fault.
+      if (typeof d.camera_connected === 'boolean') camDot('agv', d.camera_connected);
       // LiDAR is the sensor that can actually stop the rover, so the strip
       // carries the verdict the control loop is acting on — not just a link
       // flag. Colour follows the three-zone rule used everywhere else:
@@ -1579,10 +1792,13 @@
 
 
     // ── Tabs ─────────────────────────────────────────────────────────
-    // Drive (camera, vehicle state, speed, manual) -> Chassis & encoders ->
-    // Motor test -> Logs & system. The choice is kept in the URL hash and in
-    // localStorage, so a reload comes back to the same tab.
-    const TAB_IDS = ['drive', 'chassis', 'test', 'record', 'lidar', 'cam', 'logs'];
+    // Drive, Bench, Record, LiDAR, Camera, Voice, Logs. The choice is kept in
+    // the URL hash and in localStorage, so a reload comes back to the same tab.
+    // _TAB_HOOKS lets a tab do its own first-show work from below this block,
+    // where its script has already been defined — the same place Bench's chart
+    // and LiDAR's config load, wired in a line each.
+    const _TAB_HOOKS = [];
+    const TAB_IDS = ['drive', 'bench', 'record', 'lidar', 'cam', 'voice', 'logs'];
     function showTab(id, focus) {
       if (!TAB_IDS.includes(id)) id = 'drive';
       for (const t of TAB_IDS) {
@@ -1595,8 +1811,9 @@
       }
       try { localStorage.setItem('agv-tab', id); } catch (e) {}
       if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
-      if (id === 'chassis' || id === 'test') drawChart();
+      if (id === 'bench') drawChart();
       if (id === 'lidar') loadLidarConfig();
+      for (const hook of _TAB_HOOKS) hook(id);
     }
     $('tabs').addEventListener('click', (e) => { const b = e.target.closest('button[data-tab]'); if (b) showTab(b.dataset.tab); });
     $('tabs').addEventListener('keydown', (e) => {
@@ -1612,7 +1829,7 @@
     })();
     function updateTabDots(d) {
       const bad = !!(d.enc_fault_l || d.enc_fault_r) || d.stm32_connected === false;
-      $('dot-chassis').className = 'tabdot' + (bad ? ' on' : '');
+      $('dot-bench').className = 'tabdot' + (bad ? ' on' : '');
       $('dot-logs').className = 'tabdot warn' + (d.last_error ? ' on' : '');
     }
 
@@ -1686,14 +1903,31 @@
 
 
     // ── Record tab ───────────────────────────────────────────────────
-    const REC = { on: false, pending: 0 };
+    // REC.state tracks the lifecycle of a recording *this dashboard started by
+    // itself*, separately from REC.on (is one running at all) and REC.pref (is
+    // "record every AUTO drive" switched on). Only an auto recording is ever
+    // stopped automatically and offered at the end; one you started by hand is
+    // yours, and nothing here ends it behind your back.
+    //   null    nothing of ours in flight
+    //   start   we POSTed start, waiting for the AGV to report rec_on
+    //   run     it is recording
+    //   stop    we POSTed stop, waiting for rec_on to clear
+    const REC = { on: false, pending: 0, state: null, pref: false, last: null };
     const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-    async function recCall(body) {
-      try {
-        const r = await fetch('/api/record', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        if (!r.ok) toast('Recording request failed (' + r.status + ')', 'err');
-        return r.ok;
-      } catch (e) { toast('Recording request failed', 'err'); return false; }
+    // One request at a time, in the order they were made. Without this a
+    // start and the stop that follows it can reach the server in either order,
+    // and a stop that lands first is a no-op — leaving a recording running
+    // that nothing will ever close.
+    let recQueue = Promise.resolve();
+    function recCall(body) {
+      recQueue = recQueue.then(async () => {
+        try {
+          const r = await fetch('/api/record', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (!r.ok) toast('Recording request failed (' + r.status + ')', 'err');
+          return r.ok;
+        } catch (e) { toast('Recording request failed', 'err'); return false; }
+      });
+      return recQueue;
     }
     function recStart() {
       REC.pending = Date.now();
@@ -1703,11 +1937,12 @@
     const recMark = async () => {
       if (await recCall({ action: 'mark', note: $('rec-note').value.trim() })) { toast('Frame marked', 'ok', 1500); $('rec-note').value = ''; }
     };
-    $('rec-start').addEventListener('click', recStart);
+    // No event argument: addEventListener would hand recStart the click
+    // event, and a truthy auto flag is how a hand-started recording used to
+    // get treated as an automatic one (and stopped behind your back).
+    $('rec-start').addEventListener('click', () => recStart());
     $('rec-stop').addEventListener('click', recStop);
     $('rec-mark').addEventListener('click', recMark);
-    $('rec-quick').addEventListener('click', () => (REC.on ? recStop() : recStart()));
-    $('rec-quick-mark').addEventListener('click', recMark);
     document.addEventListener('keydown', (e) => {
       if (e.key.toLowerCase() !== 'm' || !REC.on || e.ctrlKey || e.metaKey || e.altKey) return;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
@@ -1715,12 +1950,23 @@
     });
     function updateRecord(d) {
       REC.on = !!d.rec_on;
+      REC.pref = d.record_auto === true;
       const settled = Date.now() - REC.pending > 2500;
       const chip = $('rec-chip');
       chip.textContent = REC.on ? `● REC ${fmtT(d.rec_elapsed_s || 0)}` : 'not recording';
       chip.className = 'pill ' + (REC.on ? 'bad' : '');
       $('rec-start').disabled = REC.on; $('rec-stop').disabled = !REC.on; $('rec-mark').disabled = !REC.on;
       $('rec-rate').disabled = REC.on; $('rec-mode').disabled = REC.on; $('rec-views').disabled = REC.on;
+      syncRecViews();
+      syncRecAuto();
+      // Keep the running summary to hand: once the recording stops, rec_frames
+      // and rec_elapsed_s are back to zero and the prompt has nothing to show.
+      if (REC.on) {
+        REC.last = { session: d.rec_session, frames: d.rec_frames ?? 0,
+                     problems: d.rec_problems ?? 0, marks: d.rec_marks ?? 0,
+                     mb: d.rec_mb ?? 0, secs: d.rec_elapsed_s || 0 };
+        if (REC.state === 'start') REC.state = 'run';
+      }
       setText('rec-session', d.rec_session
         ? [d.rec_session, d.rec_format, d.rec_mode, d.rec_ring_s != null ? `ring ${d.rec_ring_s}s` : null].filter(Boolean).join(' · ')
         : '—');
@@ -1734,12 +1980,85 @@
       if (d.camera_connected === false) warn.push('no camera frames: nothing can be recorded (is the full project running?)');
       $('rec-warn').textContent = warn.join(' · ');
       $('dot-record').className = 'tabdot rec' + (REC.on ? ' on' : '');
-      const q = $('rec-quick'); q.textContent = REC.on ? `■ Stop ${fmtT(d.rec_elapsed_s || 0)}` : '● Record';
-      $('rec-quick-mark').hidden = !REC.on;
       $('sum-rec').className = 'chip ' + (REC.on ? 'bad' : '');
       if (REC.wasOn && !REC.on && settled) loadSessions();
       REC.wasOn = REC.on;
+
+      // Auto-record. "Driving" means AUTO *and* the motors actually on: that
+      // is the moment the rover starts moving, and it is the moment the
+      // recording should start, so a session holds the drive and neither end of
+      // it is dead time on the bench.
+      const driving = d.record_auto === true && d.mode === 'auto' && d.enabled === true;
+      $('rec-auto-why').textContent = driving
+        ? 'Recording now — it stops on its own when you STOP or leave AUTO.'
+        : 'Records from the moment you press START in AUTO until you STOP or leave AUTO, then asks whether to keep it. Off by default — every drive it ticks fills disk.';
+      // Every transition happens exactly once, and each waits for the AGV to
+      // report back before it moves on. `settled` debounces the start so a
+      // jittery `enabled` cannot start a burst of recordings.
+      if (REC.state === null && settled && driving && !REC.on) {
+        REC.state = 'start'; recStart();
+      } else if (REC.state === 'start' && !driving) {
+        // The drive ended before the AGV confirmed the start. Ask for the stop
+        // anyway — a stop with nothing recording is a no-op, but a start that
+        // lands after it would be a recording nothing is left to close.
+        REC.state = 'stop'; recStop();
+      } else if (REC.state === 'run' && !driving) {
+        REC.state = 'stop'; recStop();
+      } else if (REC.state === 'stop' && !REC.on) {
+        // Only a recording this dashboard started by itself gets the prompt —
+        // one you started by hand is yours to stop, review and delete yourself.
+        REC.state = null;
+        if (REC.last?.session) recPending = REC.last;
+      }
+      // Now that the wheels are stopped, ask about the drive just finished.
+      if (recPending && !d.enabled) { const p = recPending; recPending = null; recPrompt(p); }
     }
+
+    // ── Record every AUTO drive, and the save-or-delete prompt ────────
+    // A finished auto recording waiting for the rover to be still.
+    let recPending = null;
+    const recAutoBox = $('rec-auto');
+    recAutoBox.addEventListener('change', async () => {
+      const want = recAutoBox.checked;
+      const r = await fetch('/api/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ action: 'auto', enabled: want }) });
+      if (!r.ok) { recAutoBox.checked = !want; toast('Auto-record setting not saved', 'err'); return; }
+      if (!want) { REC.pref = false; toast('Auto-record off — the current recording, if any, keeps running', 'info', 5000); }
+      else toast('Auto-record on — the next AUTO drive will be recorded', 'ok', 4000);
+    });
+    // One truth: the checkbox follows the server, like every other switch here.
+    function syncRecAuto() { recAutoBox.checked = REC.pref; }
+
+    function recPrompt(last) {
+      setText('rd-session', last.session || '—');
+      setText('rd-frames', last.frames ?? '—');
+      setText('rd-flags', `${last.problems} · ${last.marks}`);
+      setText('rd-size', `${(last.mb || 0).toFixed(1)} MB · ${fmtT(last.secs || 0)}`);
+      const dlg = $('rec-done');
+      // A zero-frame drive has nothing worth keeping — say so rather than
+      // offering a choice between two identical outcomes.
+      $('rd-del').disabled = !(last.frames > 0);
+      $('rec-done-why').textContent = last.frames > 0
+        ? 'Nothing was thrown away: the frames are already written to recordings/. Keep it, or delete the folder and the disk goes straight back.'
+        : 'That drive recorded no frames — there is nothing to keep, so the folder is already empty.';
+      if (!dlg.open) dlg.showModal();
+    }
+    $('rd-keep').addEventListener('click', () => { $('rec-done').close(); toast('Kept', 'ok', 1500); });
+    $('rd-review').addEventListener('click', () => {
+      const n = REC.last?.session;
+      if (!n) return;
+      window.open('/review/' + encodeURIComponent(n), '_blank', 'noopener');
+      $('rec-done').close();
+    });
+    $('rd-del').addEventListener('click', async () => {
+      const n = REC.last?.session;
+      if (!n) return;
+      if (!(await requireAuth('Sign in to delete a recording.'))) return;
+      const r = await authFetch('/api/recordings/' + encodeURIComponent(n), undefined, 'DELETE');
+      $('rec-done').close();
+      if (r.ok) { toast('Recording deleted', 'ok', 2500); loadSessions(); }
+      else toast('Not deleted (' + r.status + ') — it is still on disk', 'err', 6000);
+    });
     async function loadSessions() {
       let j;
       try { j = await (await fetch('/api/recordings', { cache: 'no-store' })).json(); } catch (e) { return; }
@@ -2031,19 +2350,21 @@
     })();
 
     // Only spin up the panels when the Logs tab is first shown — avoid
-    // burning background polls while the user is on Drive / Chassis / Record.
-    const _origShowTab = typeof showTab === 'function' ? showTab : null;
+    // burning background polls while the user is on another tab. Registered
+    // as a showTab hook rather than a click handler on the button, so the
+    // panels load however the tab is reached: deep link, arrow key or click.
     let _logsInited = false;
     function _ensureLogsInited() {
       if (_logsInited) return;
       _logsInited = true;
       try { LogsPanels.init(); } catch (e) { console.error('LogsPanels init failed', e); }
     }
-    document.getElementById('tabbtn-logs')?.addEventListener('click', _ensureLogsInited);
-    // Also pre-init if the tab is already the active one (deep link).
-    if (document.getElementById('tabbtn-logs')?.getAttribute('aria-selected') === 'true') {
-      _ensureLogsInited();
-    }
+    _TAB_HOOKS.push((id) => { if (id === 'logs') _ensureLogsInited(); });
+    // The page can already be on Logs by the time this runs — a deep link
+    // picks the tab before any hook is registered — so init it here too.
+    if ($('tabbtn-logs').getAttribute('aria-selected') === 'true') _ensureLogsInited();
+
   </script>
+
 </body>
 </html>

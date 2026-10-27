@@ -82,6 +82,7 @@ from .mic import (
     find_alsa_card,
     frame_rms,
     list_capture_cards,
+    summarise_capture_cards,
 )
 from .persona import render_event, utterance_for_event
 from .stt import (
@@ -133,7 +134,8 @@ __all__ = [
     'AUDIO_EXTS', 'PHRASES_DIR',
     # Microphone input (C270)
     'MicCapture', 'MicDevice', 'MicUnavailable', 'LevelMeter',
-    'find_alsa_card', 'list_capture_cards', 'frame_rms',
+    'find_alsa_card', 'list_capture_cards', 'summarise_capture_cards',
+    'frame_rms',
     # Speech-to-text (Deepgram primary, Google fallback)
     'SttEngine', 'SttBackend', 'SttError', 'Transcript', 'default_backend',
     'DeepgramSttBackend', 'GoogleSttBackend', 'OfflineSttBackend',

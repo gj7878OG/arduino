@@ -334,6 +334,7 @@ class AGV:
         self._snapshot_if_obstacle(now, frame, vis)
         enabled = ctl['enabled']
         speed_pct = ctl['max_speed_pct']
+        look_m = ctl['lookahead_m']
         # Dashboard master limit: every speed and turn target scales with it.
         scale = (speed_pct / 100.0) * 255.0 / V_MAX
         if enabled and not self._enabled:
@@ -341,6 +342,13 @@ class AGV:
             self.vision.reset_floor()       # operator re-armed: relearn the floor
         link_ok = self.arduino.link_alive()
         self.controller.speed_scale = scale
+        # Dashboard minimum-turn-authority slider (wheel-level PWM difference).
+        self.controller.turn_floor_base = ctl['turn_floor_base']
+        # Pure-pursuit lookahead: shorter = tracks the centre of the line
+        # more tightly (and more noisily). Both the controller fallback and
+        # the vision sampling distance follow it.
+        self.controller.lookahead_m = look_m
+        self.vision.lookahead_m = look_m
         self._closed_wanted = ctl['closed_loop']
         _w = self.motion.snapshot()
         self.controller.moving = (enabled and ctl['mode'] == 'auto'

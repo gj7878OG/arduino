@@ -113,6 +113,12 @@ EMERGENCY_STOP_ACK = 'Stopped.'
 # never writes.
 CONTROL_FILENAME = 'control.json'
 POINTS_FILENAME = 'points.json'
+# Camera link. Written by the dashboard process (cam/facefile.py) and read here;
+# CAM_WATCH is the reverse: we ask the camera to wake for a moment. The cam
+# package duplicates these two names on purpose (neither side imports the other);
+# tests/test_cam_voice_link.py fails if they ever drift apart.
+CAM_FACES_FILENAME = 'cam_faces.json'
+CAM_WATCH_FILENAME = 'cam_watch.json'
 
 # ── Persona events that produce speech (no audio here) ──────────────
 # Each one has an utterance template in PERSONA.md / persona.py.
@@ -140,7 +146,49 @@ PERSONA_EVENTS = frozenset({
     'mode_changed',        # while enabled, mode flipped (mode slot)
     'obstacle_stop_disabled',     # obstacle_stop True→False (password override)
     'lidar_disabled',             # lidar_enabled True→False (password override)
+
+    # Camera link: who the rover can see
+    'person_greeted',      # unprompted, an opted-in person (greeting slot)
+    'person_unknown',      # unprompted, optional, off by default
+    'person_called',       # operator asked the rover to call someone (name slot)
+    'person_not_seen',     # ...but they are not in view (name slot)
+    'who_none',            # asked who is here: nobody
+    'who_known',           # ...known people only (names slot)
+    'who_mixed',           # ...known people plus strangers (names, others slots)
+    'who_strangers',       # ...only people it does not recognise (others slot)
+    'who_blind',           # ...the camera is offline, so it cannot say
+
+    # Confirm flow, status report and help (fixed text; all pre-recordable)
+    'confirm_prompt', 'confirmed', 'cancelled', 'understood', 'standing_by',
+    'status_motors_on', 'status_mode_auto', 'status_mode_manual',
+    'status_lidar_clear', 'status_lidar_offline', 'status_lidar_off',
+    'status_camera_online', 'status_camera_offline',
+    'battery_unknown', 'position_unknown', 'controller_unreachable',
+    'voice_control_off',
+    'intro', 'help_summary',
+    'obstacle_none', 'obstacle_stop', 'obstacle_slow',
 })
+
+# Events whose text contains a person's name. They can never be a pre-recorded
+# clip (a clip named after the event would play without the name), so the phrase
+# cache is bypassed for them and they are not counted as missing cache entries.
+DYNAMIC_EVENTS = frozenset({'person_greeted', 'person_called', 'person_not_seen',
+                            'who_known', 'who_mixed'})
+
+# Speech that must never wait behind, or be delayed by, a greeting.
+SAFETY_EVENTS = frozenset({'lidar_hold', 'emergency_stop', 'stuck', 'battery_low',
+                           'obstacle_stop_disabled', 'lidar_disabled', 'mute_engaged'})
+# Unprompted speech: dropped, never queued, when the speaker is busy.
+DROPPABLE_EVENTS = frozenset({'person_greeted', 'person_unknown'})
+
+# ── Camera link behaviour ───────────────────────────────────────────
+FACES_FRESH_S = 3.0          # cam_faces.json older than this means the dashboard is not publishing
+GREET_MIN_GAP_S = 10.0       # at most one greeting this often, whoever it is for
+SAFETY_QUIET_S = 10.0        # no greeting this soon after a safety announcement
+UNKNOWN_SEEN_S = 3.0         # a stranger must be in view this long before 'person_unknown'
+LOOKUP_TIMEOUT_S = 6.0       # how long 'who is here?' waits for the camera to look
+LOOKUP_SETTLE_S = 1.5        # ...and the least it waits before saying nobody is there
+LOOKUP_WATCH_TTL_S = 8.0     # how long we ask the camera to stay awake
 
 # ── Motion intent clamps (Phase 3, intent validator) ───────────────
 # Hard limits on what a motion intent is allowed to specify, regardless

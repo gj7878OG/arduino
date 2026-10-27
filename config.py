@@ -63,6 +63,14 @@ CAMERA_SENSOR_ID = int(os.environ.get('AGV_CAMERA_SENSOR_ID', '0'))
 # CaptureSession while another process holds the node. Set this only to pin a
 # specific device (AGV_CAM_PREVIEW_DEV=/dev/video1).
 CAM_PREVIEW_DEV = os.environ.get('AGV_CAM_PREVIEW_DEV', '').strip()
+# Camera-tab face recognition. Kept under face_recognition/ (gitignored), not
+# TELEMETRY_DIR, because enrolled faces must survive a reboot of /tmp.
+_FACE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_recognition')
+CAM_FACE_DB = os.environ.get('AGV_CAM_FACE_DB', os.path.join(_FACE_DIR, 'faces_db.pkl'))
+CAM_FACE_THUMBS = os.environ.get('AGV_CAM_FACE_THUMBS', os.path.join(_FACE_DIR, 'faces'))
+CAM_PROFILES = os.environ.get('AGV_CAM_PROFILES', os.path.join(_FACE_DIR, 'profiles.json'))
+CAM_SETTINGS_FILE = os.environ.get('AGV_CAM_SETTINGS_FILE',
+                                   os.path.join(_FACE_DIR, 'cam_settings.json'))
 
 # White balance (same ISP knobs as the AGV project).
 CAMERA_WB_MODE = int(os.environ.get('AGV_CAMERA_WB_MODE', '9'))

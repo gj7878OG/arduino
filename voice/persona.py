@@ -55,6 +55,51 @@ _UTTERANCES: dict[str, str] = {
         'Obstacle stop disabled. Password override accepted. Test bench mode active.',
     'lidar_disabled':
         'LiDAR disabled. Password override accepted. Test bench mode active.',
+
+    # ── Camera link ────────────────────────────────────────────────
+    # {greeting} is the person's own phrase or 'Hello, <name>.', composed by
+    # voice.face_watcher so this module stays free of logic.
+    'person_greeted':      '{greeting}',
+    'person_unknown':      'Unrecognised person.',
+    'person_called':       '{name}, please come to the rover.',
+    'person_not_seen':     "I can't see {name}.",
+    'who_none':            "I don't see anyone.",
+    'who_known':           'I see {names}.',
+    'who_mixed':           "I see {names} and {others} I don't recognise.",
+    'who_strangers':       "I see {others} I don't recognise.",
+    'who_blind':           "I can't see right now.",
+
+    # ── Confirm flow ───────────────────────────────────────────────
+    'confirm_prompt':      'Say confirm to go.',
+    'confirmed':           'Confirmed.',
+    'cancelled':           'Cancelled.',
+    'understood':          'Understood.',
+    'standing_by':         'Standing by.',
+
+    # ── Status report pieces (composed by voice.respond from telemetry) ──
+    'status_motors_on':    'Motors are on.',
+    'status_mode_auto':    'Auto mode.',
+    'status_mode_manual':  'Manual mode.',
+    'status_lidar_clear':  'LiDAR is clear.',
+    'status_lidar_offline': 'LiDAR is offline.',
+    'status_lidar_off':    'LiDAR safety is off.',
+    'status_camera_online': 'Camera is online.',
+    'status_camera_offline': 'Camera is offline.',
+    # Honest "no": there is no battery sensor and no pose estimate yet.
+    'battery_unknown':     "I can't measure the battery.",
+    'position_unknown':    "I don't track my position.",
+    'controller_unreachable': "I can't reach the controller.",
+    # Voice can't drive yet, and must never *sound* like it did.
+    'voice_control_off':   "Voice control isn't switched on. Use the dashboard.",
+
+    # ── Help ───────────────────────────────────────────────────────
+    'intro':               "I'm Tarka. Say stop at any time.",
+    'help_summary':        'I can move, stop, and report status.',
+
+    # ── Obstacle ───────────────────────────────────────────────────
+    'obstacle_none':       'Nothing in front of me.',
+    'obstacle_stop':       'Obstacle ahead. Stopping.',
+    'obstacle_slow':       'Slowing down. Obstacle nearby.',
 }
 
 

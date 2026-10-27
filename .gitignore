@@ -21,3 +21,6 @@ recordings/
 face_recognition/models/
 face_recognition/faces_db.pkl
 yolov8n.pt
+face_recognition/faces/
+face_recognition/cam_settings.json
+face_recognition/profiles.json

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the AGV that drives the Arduino chassis, from /home/deep/arduino/.
-# Starts the web dashboard + the drive orchestrator and stops BOTH together.
+# Starts the web dashboard + the drive orchestrator + the voice runner and
+# stops ALL THREE together.
 # The Arduino serial port defaults to /dev/ttyACM0.
 #
 # Usage:
@@ -8,8 +9,10 @@
 #   AGV_ARDUINO_PORT=/dev/ttyUSB0 ./agv_run.sh   # different port
 #   AGV_CAMERA_SENSOR_ID=1 ./agv_run.sh           # CAM1 instead of CAM0
 #   AGV_SHOW_WINDOW=1 ./agv_run.sh                # local OpenCV preview
+#   AGV_VOICE=0 ./agv_run.sh                      # no voice (log-only AGV)
+#   AGV_VOICE_DRY_RUN=1 ./agv_run.sh              # voice, but no audio out
 #
-# Stopping - every one of these stops the dashboard AND the drive loop:
+# Stopping - every one of these stops the dashboard, the drive loop AND voice:
 #   Ctrl+C                              # in the terminal running this
 #   kill <agv_run.sh pid>               # SIGTERM, from anywhere (incl. SSH)
 #   the AGV exiting on its own           # teardown follows automatically
@@ -36,8 +39,10 @@ LOG_DIR="${HERE}/logs"
 mkdir -p "$LOG_DIR"
 WEB_PID=""
 AGV_PID=""
+VOICE_PID=""
 WEB_PID_FILE="$LOG_DIR/web.pid"
 WEB_LOG="$LOG_DIR/web.log"
+VOICE_LOG="$LOG_DIR/voice.log"
 RUN_PID_FILE="$LOG_DIR/run.pid"
 echo $$ >"$RUN_PID_FILE"
 
@@ -69,6 +74,22 @@ _is_agv() {
   a1="$(_argv "$1" | sed -n 2p)"
   [[ "$a0" == *python3 || "$a0" == *python ]] || return 1
   [[ "$a1" == "agv_drive_arduino.py" ]]
+}
+
+# The voice runner is launched as `-m voice.run_phase0`, so argv[1] is '-m'
+# and the module name is argv[2]. Orphaned voice is quieter than an orphaned
+# AGV but still wrong: two runners would race on voice_command.json and double
+# every announcement.
+_is_voice() {
+  local a0 a1 a2 cwd
+  kill -0 "$1" 2>/dev/null || return 1
+  cwd="$(readlink -f "/proc/$1/cwd" 2>/dev/null || true)"
+  [[ "$cwd" == "$HERE" ]] || return 1
+  a0="$(_argv "$1" | sed -n 1p)"
+  a1="$(_argv "$1" | sed -n 2p)"
+  a2="$(_argv "$1" | sed -n 3p)"
+  [[ "$a0" == *python3 || "$a0" == *python ]] || return 1
+  [[ "$a1" == "-m" && "$a2" == "voice.run_phase0" ]]
 }
 
 # TERM, wait up to 5s, then KILL. Always by explicit pid: `pkill -f` also
@@ -104,6 +125,10 @@ reap_stale_dashboards() {
       echo "Reaping orphaned dashboard from an earlier run (pid=$pid)"
       _kill_pid "$pid"
     fi
+    if _is_voice "$pid"; then
+      echo "Reaping orphaned voice runner from an earlier run (pid=$pid)"
+      _kill_pid "$pid"
+    fi
   done
   rm -f "$WEB_PID_FILE"
 }
@@ -116,6 +141,13 @@ _on_exit() {
   if [[ -n "$AGV_PID" ]] && kill -0 "$AGV_PID" 2>/dev/null; then
     echo "Stopping AGV (agv_drive_arduino.py pid=$AGV_PID)"
     _kill_pid "$AGV_PID"
+  fi
+  # Voice after the AGV so it cannot narrate a rover that has already stopped,
+  # and before the dashboard goes away: the dashboard owns the speaker choice
+  # this runner reads at startup.
+  if [[ -n "$VOICE_PID" ]] && kill -0 "$VOICE_PID" 2>/dev/null; then
+    echo "Stopping voice runner (pid=$VOICE_PID)"
+    _kill_pid "$VOICE_PID"
   fi
   if [[ -n "$WEB_PID" ]] && kill -0 "$WEB_PID" 2>/dev/null; then
     echo "Stopping dashboard (web.py pid=$WEB_PID)"
@@ -134,6 +166,7 @@ echo "Starting Arduino-driven AGV from $HERE"
 echo "  AGV_ARDUINO_PORT = ${AGV_ARDUINO_PORT:-/dev/ttyACM0}"
 echo "  AGV_DASHBOARD_DIR= $AGV_DASHBOARD_DIR"
 echo "  AGV_CAMERA_SENSOR_ID = ${AGV_CAMERA_SENSOR_ID:-0}"
+echo "  voice            = $([[ "${AGV_VOICE:-1}" == "0" ]] && echo 'off (AGV_VOICE=0)' || echo 'on')"
 echo "  PYTHONPATH       = $PYTHONPATH"
 
 reap_stale_dashboards
@@ -174,6 +207,48 @@ fi
 
 /usr/bin/python3 agv_drive_arduino.py >>"$LOG_DIR/agv.log" 2>&1 &
 AGV_PID=$!
+
+# Voice runs as its own process because the C270's ALSA capture device is
+# exclusive: the dashboard must never open the mic. It reads control.json,
+# points.json and cam_faces.json that the two processes above publish, and
+# speaks through the speaker selected on the Voice tab.
+#
+# A voice failure is a warning, never fatal. The rover has to be able to drive
+# with no audio stack installed at all, so this must not abort the run the way
+# a dashboard failure does - there, losing the UI means driving blind.
+VOICE_ARGS=(--telemetry-dir "$AGV_DASHBOARD_DIR")
+[[ "${AGV_VOICE_DRY_RUN:-0}" == "1" ]] && VOICE_ARGS+=(--dry-run)
+
+if [[ "${AGV_VOICE:-1}" == "0" ]]; then
+  echo "voice runner disabled (AGV_VOICE=0)"
+else
+  /usr/bin/python3 -m voice.run_phase0 "${VOICE_ARGS[@]}" >>"$VOICE_LOG" 2>&1 &
+  VOICE_PID=$!
+  echo "voice.run_phase0 pid=$VOICE_PID"
+
+  # Give it a moment to publish voice_status.json. Unattended audio is a
+  # silent failure: the rover would drive and narrate nothing with no sign of
+  # it anywhere, so say so here rather than letting it pass unnoticed.
+  _voiceready=0
+  for _ in {1..50}; do
+    kill -0 "$VOICE_PID" 2>/dev/null || break
+    if [[ -f "$AGV_DASHBOARD_DIR/voice_status.json" ]]; then
+      _voiceready=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$_voiceready" -eq 1 ]]; then
+    echo "voice is live; speaker + phrase cache in $VOICE_LOG"
+  elif kill -0 "$VOICE_PID" 2>/dev/null; then
+    echo "WARNING: voice published no voice_status.json in 5s - narration may be off. Tail of $VOICE_LOG:" >&2
+    tail -n 10 "$VOICE_LOG" >&2 || true
+  else
+    echo "WARNING: voice runner died at startup. Tail of $VOICE_LOG:" >&2
+    tail -n 10 "$VOICE_LOG" >&2 || true
+    VOICE_PID=""
+  fi
+fi
 
 # `wait` (not a foreground call) is what makes the trap usable: bash defers
 # traps until a *foreground* command finishes, so a plain foreground launch

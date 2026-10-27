@@ -35,6 +35,14 @@ os.environ['AGV_ARDUINO_PORT'] = '/dev/agv-test-none'
 os.environ['AGV_LIDAR_PORT'] = '/dev/agv-test-none'
 # Default is auth ON; plain-server tests assume open endpoints. Tests that exercise
 # the real defaults (test_e2e, enforced test_review_ui) pop this from their spawn env.
+# web.py opens the USB camera at import. Pin it to a node that cannot exist so a
+# test never grabs the C270 (uvcvideo has one opener) or probes /dev/video*.
+os.environ['AGV_CAM_PREVIEW_DEV'] = '/dev/agv-test-none'
+# Enrolled faces are biometric data: keep tests off the real db and settings.
+os.environ['AGV_CAM_FACE_DB'] = os.path.join(DASH_DIR, 'faces_db.pkl')
+os.environ['AGV_CAM_FACE_THUMBS'] = os.path.join(DASH_DIR, 'faces')
+os.environ['AGV_CAM_PROFILES'] = os.path.join(DASH_DIR, 'profiles.json')
+os.environ['AGV_CAM_SETTINGS_FILE'] = os.path.join(DASH_DIR, 'cam_settings.json')
 os.environ.setdefault('AGV_REC_REQUIRE_AUTH', '0')
 os.environ.setdefault('AGV_CONTROL_FILE', os.path.join(DASH_DIR, 'control.json'))
 

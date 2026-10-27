@@ -1,10 +1,12 @@
-<div class="tabpanel grid single" id="tab-cam" role="tabpanel" aria-labelledby="tabbtn-cam" hidden>
-      <section class="card" id="cam-card">
-        <h2>USB camera feed <span id="cam-status-chip" class="pill cam-pending" style="margin-left:.5rem">offline</span></h2>
+<div class="tabpanel grid" id="tab-cam" role="tabpanel" aria-labelledby="tabbtn-cam" hidden>
+  <div class="stack">
+    <section class="card nocollapse" id="cam-card">
+      <h2>USB camera feed <span id="cam-status-chip" class="pill cam-pending" style="margin-left:.5rem">offline</span></h2>
+      <div class="tab-body">
         <p class="note">
-          Live MJPEG from <code id="cam-device-name">/dev/video0</code> at 640x480.
-          The publisher is started by <code>web.py</code> and serves the latest
-          frame at ~12 fps (server-side throttle; the C270 itself streams at 30 fps).
+          Live MJPEG from <code id="cam-device-name">the USB camera</code> at 640x480.
+          Faces and objects are detected server-side on the same frames and drawn here as an overlay,
+          so the feed itself never waits on the models. Detection runs only while this tab is open.
         </p>
         <div id="cam-bar" class="cam-bar" aria-label="Camera live status">
           <span class="cstat"><span class="dot" id="cam-dot"></span><span class="lbl">Status</span><span id="cam-status" class="v">—</span></span>
@@ -15,9 +17,22 @@
           <span class="cstat"><span class="lbl">Frames</span><span id="cam-frames" class="v mono">—</span></span>
           <span class="cstat" style="flex:1;min-width:14rem"><span class="lbl">Last error</span><span id="cam-err" class="v">—</span></span>
         </div>
+
+        <div class="cam-tools" aria-label="Detection controls">
+          <button type="button" class="cam-toggle" id="cam-t-faces" aria-pressed="false">Faces</button>
+          <button type="button" class="cam-toggle" id="cam-t-objects" aria-pressed="false">Objects</button>
+          <label class="cam-slider" title="Cosine similarity needed to call a face known. Higher is stricter.">
+            <span class="lbl">Match threshold</span>
+            <input type="range" id="cam-thr" min="0.2" max="0.8" step="0.01" value="0.36" />
+            <span class="v mono" id="cam-thr-v">0.36</span>
+          </label>
+          <span class="cam-perf mono" id="cam-perf" title="Detector / embedding / object model time and analytics rate">—</span>
+        </div>
+
         <div id="cam-frame-wrap" class="cam-frame-wrap">
           <img id="cam-frame" alt="USB camera feed (offline)"
                src="" data-live="0" />
+          <canvas id="cam-overlay" aria-hidden="true"></canvas>
           <div id="cam-offline" class="cam-offline-overlay">
             <div class="cam-offline-card">
               <strong>Camera offline</strong>
@@ -26,5 +41,81 @@
             </div>
           </div>
         </div>
-      </section>
-    </div>
+        <p class="cam-model-note" id="cam-model-note" hidden></p>
+      </div>
+    </section>
+
+    <section class="card" id="cam-events-card">
+      <h2>Events</h2>
+      <div class="tab-body">
+        <ul class="cam-list cam-events" id="cam-events"><li class="cam-empty">Nothing yet</li></ul>
+      </div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="card" id="cam-inview-card">
+      <h2>In view</h2>
+      <div class="tab-body">
+        <ul class="cam-list" id="cam-faces-now"><li class="cam-empty">No faces</li></ul>
+        <ul class="cam-list" id="cam-objects-now" hidden></ul>
+      </div>
+    </section>
+
+    <section class="card" id="cam-enroll-card">
+      <h2>Add a face</h2>
+      <div class="tab-body">
+        <form id="cam-enroll-form" class="cam-enroll" autocomplete="off">
+          <input type="text" id="cam-enroll-name" maxlength="32" placeholder="Name" aria-label="Name to enrol"
+                 pattern="[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}" required />
+          <button type="submit" id="cam-enroll-go">Add face</button>
+          <button type="button" id="cam-enroll-cancel" hidden>Cancel</button>
+        </form>
+        <div class="cam-progress" id="cam-enroll-bar" hidden><i id="cam-enroll-fill"></i></div>
+        <p class="note" id="cam-enroll-msg">One person in view, facing the camera. Turn your head slightly between captures.</p>
+      </div>
+    </section>
+
+    <section class="card" id="cam-people-card">
+      <h2>People <span class="mono" id="cam-people-count"></span></h2>
+      <div class="tab-body">
+        <div class="cam-roster" id="cam-roster"><p class="cam-empty">Nobody enrolled yet.</p></div>
+        <form id="cam-profile-form" class="cam-profile" autocomplete="off" hidden>
+          <h4>Details · <span id="cam-profile-name"></span></h4>
+          <label>Role <input type="text" id="cam-profile-role" maxlength="40" placeholder="e.g. Operator" /></label>
+          <label>Greeting <input type="text" id="cam-profile-greeting" maxlength="80" placeholder="Hello, name." /></label>
+          <label>Notes <textarea id="cam-profile-notes" maxlength="300" rows="3" placeholder="For operators only"></textarea></label>
+          <label class="cam-check"><input type="checkbox" id="cam-profile-greet" /> Greet by name when seen</label>
+          <p class="note" id="cam-profile-preview"></p>
+          <p class="note">Notes stay on the dashboard. Only the greeting is ever spoken, and only if the box above is ticked and the Greeter is on.</p>
+          <div class="cam-enroll">
+            <button type="submit" id="cam-profile-save">Save</button>
+            <button type="button" id="cam-profile-close">Close</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card" id="cam-greeter-panel">
+      <h2>Rover voice</h2>
+      <div class="tab-body">
+        <p class="cam-voice-line"><i class="cam-id-dot" id="cam-voice-dot"></i><span id="cam-voice-status">checking…</span></p>
+        <div class="cam-greeter">
+          <button type="button" class="cam-toggle" id="cam-t-greeter" aria-pressed="false"
+                  title="Keeps the camera analysing with this tab closed, and lets the rover greet opted-in people by name.">Greeter</button>
+          <button type="button" id="cam-say-who" title="Ask the rover to say who it can see right now.">Say who's here</button>
+        </div>
+        <label class="cam-slider" title="Similarity needed before the rover will say a name aloud. Stricter than the box threshold.">
+          <span class="lbl">Greeting similarity</span>
+          <input type="range" id="cam-gsim" min="0.4" max="0.8" step="0.01" value="0.5" />
+          <span class="v mono" id="cam-gsim-v">0.50</span>
+        </label>
+        <label class="cam-slider"><span class="lbl">Same person again after</span>
+          <input type="number" id="cam-gcool" min="30" max="3600" step="10" value="300" /> <span class="lbl">s</span>
+        </label>
+        <label class="cam-check"><input type="checkbox" id="cam-gunk" /> Announce unrecognised people</label>
+        <p class="note">The greeter is off by default and each person must opt in. Spoken names are synthesised by Deepgram (a cloud service). Recognition is a convenience, not security: a photo can fool it.</p>
+      </div>
+    </section>
+  </div>
+</div>

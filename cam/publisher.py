@@ -31,7 +31,12 @@ log = logging.getLogger('agv.cam')
 # ~12fps cuts CPU by ~2.5x with no perceptible lag in a 480p feed.
 DEFAULT_FPS = 12
 JPEG_QUALITY = 80
-WARMUP_FRAMES = 3      # skip the Logitech's auto-exposure ramp-up
+# The C270 returns ~25 black frames (mean brightness ~2) for ~1.1 s after
+# every open, then jumps to a normal exposure. Skipping a fixed few frames let
+# that black through, so wait for real light instead, with a cap so a lens cap
+# or a dark room still goes live.
+WARMUP_MIN_BRIGHTNESS = 12.0
+WARMUP_MAX_FRAMES = 60
 
 _RETRY_S = 5.0         # reopen cadence when the device is missing
 _WARN_EVERY_S = 10.0   # cap for repeated error spam
@@ -52,6 +57,10 @@ class CamPublisher:
 
         self._lock = threading.Lock()
         self._jpeg: Optional[bytes] = None
+        # Latest decoded frame, shared read-only with the analytics worker.
+        # cap.read() hands back a fresh array every call and nothing mutates
+        # it after publish, so consumers need no copy.
+        self._frame = None
         self._frame_seq = 0
         self._frame_ts = 0.0
         self._fps = 0.0
@@ -86,6 +95,16 @@ class CamPublisher:
     def latest_jpeg(self) -> Optional[bytes]:
         with self._lock:
             return self._jpeg
+
+    def latest_frame(self):
+        """(frame_seq, BGR ndarray) of the newest published frame, or (0, None).
+
+        The second consumer of the camera: uvcvideo lets only one process open
+        the node, so analytics must read frames from here, never reopen it.
+        Treat the array as read-only.
+        """
+        with self._lock:
+            return self._frame_seq, self._frame
 
     def status(self) -> dict:
         with self._lock:
@@ -157,12 +176,13 @@ class CamPublisher:
                 self._connected = True
                 self._last_error = ''
 
-            # Burn the warm-up frames so the dashboard doesn't flash the
-            # C270's autoexposure ramp.
-            drop += 1
-            if drop <= WARMUP_FRAMES:
-                self._stop.wait(self._period_s)
+            # Hold back the C270's black auto-exposure ramp (see the
+            # WARMUP_* constants) so the dashboard never shows it.
+            if drop < WARMUP_MAX_FRAMES and frame.mean() < WARMUP_MIN_BRIGHTNESS:
+                drop += 1
+                self._stop.wait(self._period_s / 4)
                 continue
+            drop = WARMUP_MAX_FRAMES
 
             jpeg = cv2.imencode(
                 '.jpg', frame,
@@ -170,6 +190,7 @@ class CamPublisher:
             ts = time.time()
             with self._lock:
                 self._jpeg = jpeg
+                self._frame = frame
                 self._frame_ts = ts
                 self._frame_seq += 1
 

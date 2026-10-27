@@ -26,6 +26,27 @@ it every tick. Two settings live there:
                  missing key in an old file, reads as config.REC_MODE_DEFAULT.
   closed_loop    True = wheel speed PID on the Arduino (encoders), False = raw
                  PWM. Only has effect while the firmware reports support.
+                 A standing preference, not a command: STOP, a mode change
+                 and a process restart all leave it as the operator left it.
+                 (The per-wheel test's raw flag, manual_raw, IS a command and
+                 is cleared every time the manual command goes stale.)
+  turn_floor_base  minimum turn authority, as a wheel-level PWM difference, the
+                 follower may use the moment it starts correcting; the
+                 tracking monitor's boost ramp adds on top of this up to
+                 TURN_FLOOR. Tuned from the dashboard Drive tab, because a
+                 skid-steer chassis needs a real differential before it yaws at
+                 all, and the pure-pursuit term alone asks for far less than
+                 that. Clamped on the way in *and* out, so a hand-edited
+                 control.json cannot exceed TURN_FLOOR. Standing preference,
+                 survives restarts, and only ever makes the rover steer MORE,
+                 never less, so it needs no password.
+  lookahead_m   pure-pursuit lookahead, metres ahead of the rover, 0.30-1.00.
+                 Short tracks the centre of the line tightly but is noisier;
+                 long is smooth but rides off-centre. This is the 'sit on the
+                 centre of it' knob, where turn_floor_base is the 'get back on
+                 the line' one. Clamped on the way in *and* out; the low end is
+                 held clear of the controller's 0.2 m no-usable-sample cut-off.
+                 A standing preference, survives restarts, no password.
   obstacle_stop  True = camera obstacle STOP/SLOW is enforced (default).
                  Turning it off needs the password; for bench testing only.
   max_speed_pct  master speed limit, 10-100 % of full PWM. Every other speed
@@ -41,6 +62,13 @@ it every tick. Two settings live there:
                  lidar_sector_deg is the sector-map resolution. Every value
                  is clamped on the way in *and* on the way out, and the slow
                  zone is always held clear of the stop zone.
+  record_auto   False (the default) = the dashboard starts a recording by
+                 itself whenever the rover is actually driving in AUTO
+                 (mode auto AND motors enabled), and stops it again when
+                 the drive ends. A standing preference like closed_loop,
+                 not a command: it never moves the rover and never starts
+                 a recording on its own, so it needs no password. Off by
+                 default because every drive it turns on fills disk.
 """
 
 from __future__ import annotations
@@ -55,6 +83,7 @@ from config import (
     CLOSED_LOOP, DEFAULT_SPEED_PCT, LIDAR_SECTOR_DEG, LIDAR_SLOW_DIST_M,
     LIDAR_SLOW_V_MPS, LIDAR_STOP_DIST_M, LIDAR_STALE_MS, REC_DEFAULT_RATE_HZ,
     REC_MODE_DEFAULT, SPEED_MAX_PCT, SPEED_MIN_PCT, TELEMETRY_DIR,
+    TURN_FLOOR, TURN_FLOOR_BASE, LOOKAHEAD_M,
 )
 
 CONTROL_PATH = os.path.join(TELEMETRY_DIR, 'control.json')
@@ -153,6 +182,48 @@ def _unit(x) -> float:
     return max(-1.0, min(1.0, float(x)))
 
 
+# ── Steering tuning ────────────────────────────────────────────────
+# Minimum turn authority, as a wheel-level PWM difference, available the
+# instant the rover starts correcting. Capped at TURN_FLOOR so the slider can
+# only ever hand the tracking monitor's boost ramp less headroom, never more
+# turning authority than the fully-boosted case already allows.
+TURN_FLOOR_BASE_MIN = 0.0
+TURN_FLOOR_BASE_MAX = float(TURN_FLOOR)
+# Factory default (from config.py): unchanged behaviour until the operator
+# moves the slider.
+TURN_FLOOR_BASE_DEFAULT = float(TURN_FLOOR_BASE)
+
+
+def clamp_turn_floor_base(v) -> float:
+    """Smallest wheel difference (PWM, per side) the follower may command."""
+    return round(max(TURN_FLOOR_BASE_MIN,
+                     min(TURN_FLOOR_BASE_MAX, float(v))), 1)
+
+
+# Pure-pursuit lookahead, metres ahead of the rover. Short tracks the centre of
+# the line tightly but is noisier; long is smooth but rides off-centre. The low
+# end is floored well above the controller's 0.2 m "no usable sample" cut-off,
+# so a tuned value can never put the fallback path in play.
+LOOKAHEAD_MIN_M = 0.30
+LOOKAHEAD_MAX_M = 1.00
+LOOKAHEAD_DEFAULT_M = float(LOOKAHEAD_M)
+
+
+def clamp_lookahead_m(v) -> float:
+    """Lookahead distance in metres, clamped to the tunable band."""
+    return round(max(LOOKAHEAD_MIN_M, min(LOOKAHEAD_MAX_M, float(v))), 2)
+
+
+# key -> clamp, for write_state(turn_floor_base=... / lookahead_m=...) and
+# read_state(). Both are steering tuning, so they share one table.
+STEER_CLAMPS = {
+    'turn_floor_base': clamp_turn_floor_base,
+    'lookahead_m': clamp_lookahead_m,
+}
+# Older name, kept so nothing that referenced it breaks.
+TURN_FLOOR_CLAMPS = STEER_CLAMPS
+
+
 def read_state(path: str = CONTROL_PATH) -> dict:
     """Current controls; unreadable / missing file means OFF + default speed."""
     state = {'enabled': False, 'max_speed_pct': DEFAULT_SPEED_PCT,
@@ -160,7 +231,10 @@ def read_state(path: str = CONTROL_PATH) -> dict:
              'manual_l': None, 'manual_r': None, 'manual_raw': False, 'enc_zero_ts': 0.0,
              'record': False, 'record_rate': REC_DEFAULT_RATE_HZ, 'record_views': False,
              'record_mark_ts': 0.0, 'record_mark_note': '', 'record_mode': _DEFAULT_REC_MODE,
+             'record_auto': False,
              'closed_loop': CLOSED_LOOP,
+             'turn_floor_base': TURN_FLOOR_BASE,
+             'lookahead_m': LOOKAHEAD_DEFAULT_M,
              'lidar_enabled': True,
              'lidar_stop_dist_m': LIDAR_STOP_DIST_M,
              'lidar_slow_dist_m': LIDAR_SLOW_DIST_M,
@@ -178,6 +252,12 @@ def read_state(path: str = CONTROL_PATH) -> dict:
         state['manual_w'] = _unit(raw.get('manual_w', 0.0))
         state['manual_ts'] = float(raw.get('manual_ts', 0.0))
         state['closed_loop'] = bool(raw.get('closed_loop', CLOSED_LOOP))
+        # Read back through the same clamp write_state uses, so a hand-edited
+        # control.json cannot ask for more turn authority than TURN_FLOOR.
+        state['turn_floor_base'] = clamp_turn_floor_base(
+            raw.get('turn_floor_base', TURN_FLOOR_BASE))
+        state['lookahead_m'] = clamp_lookahead_m(
+            raw.get('lookahead_m', LOOKAHEAD_DEFAULT_M))
         state['enc_zero_ts'] = float(raw.get('enc_zero_ts', 0.0))
         state['record'] = bool(raw.get('record', False))
         state['record_rate'] = max(0.2, min(60.0, float(raw.get('record_rate', REC_DEFAULT_RATE_HZ))))
@@ -185,6 +265,7 @@ def read_state(path: str = CONTROL_PATH) -> dict:
         state['record_mode'] = _rec_mode(raw.get('record_mode'))
         state['record_mark_ts'] = float(raw.get('record_mark_ts', 0.0))
         state['record_mark_note'] = str(raw.get('record_mark_note', ''))[:200]
+        state['record_auto'] = bool(raw.get('record_auto', False))
         # LiDAR zone knobs. Read back through the same clamps that
         # write_state uses, so a hand-edited file can't widen the ranges.
         state['lidar_enabled'] = bool(raw.get('lidar_enabled', True))
@@ -205,7 +286,8 @@ def read_state(path: str = CONTROL_PATH) -> dict:
 def write_state(enabled=None, max_speed_pct=None, mode=None, manual=None,
                 obstacle_stop=None, manual_lr=None, closed_loop=None, raw=False, enc_zero=False,
                 record=None, record_rate=None, record_views=None, record_mark=None,
-                record_mode=None, lidar=None, path: str = CONTROL_PATH) -> dict:
+                record_mode=None, record_auto=None, lidar=None, turn_floor_base=None,
+                lookahead_m=None, path: str = CONTROL_PATH) -> dict:
     """Update only the given fields, atomically; returns the new state.
 
     ``manual`` is a (v, w) pair in -1..1; ``manual_lr`` a (left, right) pair. Stopping (enabled=False) or leaving
@@ -222,7 +304,9 @@ def write_state(enabled=None, max_speed_pct=None, mode=None, manual=None,
                 state['manual_v'] = state['manual_w'] = 0.0
                 state['manual_l'] = state['manual_r'] = None
                 state['manual_raw'] = False
-                state['closed_loop'] = CLOSED_LOOP
+                # closed_loop survives: it is a standing preference the
+                # operator set, not a live command. Stopping the motors
+                # must not silently re-arm the encoder PID under them.
         if max_speed_pct is not None:
             state['max_speed_pct'] = clamp_speed(max_speed_pct)
         if obstacle_stop is not None:
@@ -233,7 +317,6 @@ def write_state(enabled=None, max_speed_pct=None, mode=None, manual=None,
                 state['manual_v'] = state['manual_w'] = 0.0
                 state['manual_l'] = state['manual_r'] = None
                 state['manual_raw'] = False
-                state['closed_loop'] = CLOSED_LOOP      # bench test settings never reach AUTO
         if manual is not None:
             state['manual_v'], state['manual_w'] = _unit(manual[0]), _unit(manual[1])
             state['manual_l'] = state['manual_r'] = None
@@ -246,6 +329,10 @@ def write_state(enabled=None, max_speed_pct=None, mode=None, manual=None,
             state['manual_ts'] = time.time()
         if closed_loop is not None:
             state['closed_loop'] = bool(closed_loop)
+        if turn_floor_base is not None:
+            state['turn_floor_base'] = clamp_turn_floor_base(turn_floor_base)
+        if lookahead_m is not None:
+            state['lookahead_m'] = clamp_lookahead_m(lookahead_m)
         if enc_zero:
             state['enc_zero_ts'] = time.time()
         if record is not None:
@@ -259,6 +346,8 @@ def write_state(enabled=None, max_speed_pct=None, mode=None, manual=None,
         if record_mark is not None:
             state['record_mark_ts'] = time.time()
             state['record_mark_note'] = str(record_mark)[:200]
+        if record_auto is not None:
+            state['record_auto'] = bool(record_auto)
         if lidar:
             for key, value in lidar.items():
                 if value is None:

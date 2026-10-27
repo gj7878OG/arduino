@@ -21,8 +21,10 @@ the rover must still run when it is unavailable.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
+import time
 import wave
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -161,15 +163,53 @@ def find_alsa_card(usb_id: str = C270_USB_ID) -> Optional[MicDevice]:
 
 
 def list_capture_cards() -> list[str]:
-    """Human-readable capture device list, for error messages and /voice."""
+    """Human-readable capture device list, for error messages and /voice.
+
+    Only the ``card N:`` device lines. ``arecord -l`` also prints a banner and
+    two lines of subdevice detail per device, so a machine with the Jetson's
+    onboard APE codec returns ~20 entries — passing that whole list through
+    produced a single ~5000-character log line that buried the actual problem.
+    Callers that want structured cards already match ``_CARD_LINE``.
+    """
     if shutil.which('arecord') is None:
         return []
     try:
         out = subprocess.run(['arecord', '-l'], capture_output=True,
                              text=True, timeout=5.0)
-        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
     except (OSError, subprocess.SubprocessError):
         return []
+    cards: list[str] = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        # Keep only the device line, and only the first of each card+device
+        # pair: `arecord -l` can repeat a pair when it has several subdevices.
+        if _CARD_LINE.match(line):
+            key = line.split(']:')[0]
+            if not any(c.split(']:')[0] == key for c in cards):
+                cards.append(line)
+    return cards
+
+
+def summarise_capture_cards(budget: int = 150) -> str:
+    """One short line naming the capture devices, for a warning message.
+
+    Capped by *characters*, not count: this machine's onboard ADMAIF entries
+    are ~85 characters each, so a count-based cap still produced a paragraph.
+    What the reader needs is "is the webcam there or not" — the full list is
+    always available from ``/api/voice/mic``.
+    """
+    cards = list_capture_cards()
+    if not cards:
+        return 'none detected'
+    shown: list[str] = []
+    for card in cards:
+        if shown and sum(len(c) for c in shown) + len(card) > budget:
+            break
+        shown.append(card)
+    text = '; '.join(shown)
+    if len(shown) < len(cards):
+        text += ' (+%d more; full list on the dashboard)' % (len(cards) - len(shown))
+    return text
 
 
 # ── Signal level ────────────────────────────────────────────────────
@@ -288,9 +328,9 @@ class MicCapture:
         if self.device is None:
             self.device = find_alsa_card()
         if self.device is None:
-            log.warning('C270 (%s) not found — voice input disabled. '
-                        'Capture devices present: %s',
-                        C270_USB_ID, list_capture_cards() or 'none detected')
+            log.warning('C270 (%s) not found on USB — voice input disabled. '
+                        'Capture devices present: %s. Output still works.',
+                        C270_USB_ID, summarise_capture_cards())
 
     @property
     def available(self) -> bool:
@@ -363,6 +403,89 @@ class MicCapture:
         return wav
 
 
+# ── Diagnostics (dashboard Voice tab) ───────────────────────────────
+
+_CARD_LINE = re.compile(r'^card (\d+): (\S+) \[(.*?)\], device (\d+):')
+# Below this, a capture is flat digital silence: a muted or dead mic,
+# not just a quiet room (room tone on the C270 sits in the tens).
+SILENT_PEAK_RMS = 3.0
+
+
+def mic_inventory() -> dict:
+    """What is connected, without opening any capture device.
+
+    Safe to call on every dashboard poll: it reads sysfs and runs
+    ``arecord -l`` (which enumerates, it does not capture).
+    """
+    device = find_alsa_card()
+    cards: dict[int, dict] = {}
+    for line in list_capture_cards():
+        m = _CARD_LINE.match(line)
+        if m and int(m.group(1)) not in cards:
+            idx = int(m.group(1))
+            cards[idx] = {'card': idx, 'id': m.group(2), 'name': m.group(3),
+                          'selected': device is not None and device.card == idx}
+    return {
+        'connected': device is not None,
+        'arecord': shutil.which('arecord') is not None,
+        'device': None if device is None else {
+            'card': device.card, 'plughw': device.plughw,
+            'product': device.product, 'usb_id': device.usb_id},
+        'expected_usb_id': C270_USB_ID,
+        'cards': [cards[k] for k in sorted(cards)],
+    }
+
+
+def probe_microphone(seconds: float = 1.5) -> dict:
+    """Actually capture a moment of audio and say whether the mic works.
+
+    ``state`` is one of: ``missing`` (not on USB), ``no_tool`` (arecord
+    absent), ``busy`` (another process holds it — usually the voice
+    process mid-listen), ``error`` (arecord failed), ``silent`` (captured
+    but flat zero — muted or dead), ``working`` (real signal).
+
+    "Working" means audio is arriving, not that anyone spoke.
+    """
+    inv = mic_inventory()
+    base = {'t': time.time(), 'seconds': seconds, 'peak_rms': 0.0,
+            'device': (inv['device'] or {}).get('plughw', '')}
+    if not inv['connected']:
+        return {**base, 'ok': False, 'state': 'missing',
+                'message': f'No USB microphone {C270_USB_ID} found. Re-plug the C270.'}
+    if not inv['arecord']:
+        return {**base, 'ok': False, 'state': 'no_tool',
+                'message': 'arecord is not installed (apt install alsa-utils).'}
+    cap = MicCapture()
+    try:
+        proc = subprocess.run(cap._argv(seconds), capture_output=True,
+                              timeout=seconds + 5.0)
+    except subprocess.TimeoutExpired:
+        return {**base, 'ok': False, 'state': 'error', 'message': 'capture timed out'}
+    except OSError as exc:
+        return {**base, 'ok': False, 'state': 'error', 'message': str(exc)[:160]}
+    err = (proc.stderr or b'').decode('utf-8', 'replace').strip()
+    if proc.returncode != 0:
+        busy = 'busy' in err.lower()
+        return {**base, 'ok': False, 'state': 'busy' if busy else 'error',
+                'message': ('Microphone is in use by another process '
+                            '(the voice process may be listening) — try again.'
+                            if busy else (err[:160] or 'arecord failed'))}
+    pcm = read_wav_pcm(proc.stdout or b'')
+    if not pcm:
+        return {**base, 'ok': False, 'state': 'error',
+                'message': 'arecord produced no audio'}
+    frame = max(2, int(MIC_SAMPLE_RATE * MIC_FRAME_MS / 1000) * 2)
+    peak = max(frame_rms(pcm[i:i + frame]) for i in range(0, len(pcm) - frame + 1, frame)) \
+        if len(pcm) >= frame else frame_rms(pcm)
+    base.update(peak_rms=round(peak, 1), bytes=len(pcm))
+    if peak < SILENT_PEAK_RMS:
+        return {**base, 'ok': False, 'state': 'silent',
+                'message': 'Captured, but the signal is flat zero — microphone '
+                           'muted or dead.'}
+    return {**base, 'ok': True, 'state': 'working',
+            'message': f'Audio is arriving (peak level {peak:.0f}).'}
+
+
 __all__ = [
     'MicDevice',
     'MicCapture',
@@ -370,6 +493,9 @@ __all__ = [
     'LevelMeter',
     'find_alsa_card',
     'list_capture_cards',
+    'mic_inventory',
+    'probe_microphone',
+    'SILENT_PEAK_RMS',
     'frame_rms',
     'read_wav_pcm',
 ]

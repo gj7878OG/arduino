@@ -1,11 +1,18 @@
-// Shared sign-in session (localStorage 'agv-auth'), used by templates/review.html.
-// KEEP IN SYNC with the "Sign-in session" block in templates/dashboard.html (it has its own inline copy).
-// Optional hook: set Auth.onChange = () => {...}; called after every session change.
+// Shared sign-in session (localStorage 'agv-auth'), used by every page that
+// talks to the server: dashboard.html includes it, review.html includes it.
+// One copy, so a change to the token rules cannot land on one page and not the
+// other — which is exactly what happened while dashboard.html kept its own.
+//
+// Optional hooks, set by the including page:
+//   Auth.onChange = () => {...}  called after every session change
+//   Auth.onLost   = (msg) => {}  called when the server ends the session
 const AUTH_KEY = 'agv-auth';
 const Auth = {
   data: null,                                   // {access, refresh, accessExp, refreshExp} (ms epoch)
   onChange: null,
+  onLost: null,
   _changed() { try { if (typeof this.onChange === 'function') this.onChange(); } catch (e) {} },
+  _lost(msg) { try { if (typeof this.onLost === 'function') this.onLost(msg); } catch (e) {} },
   load() {
     try { const d = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); this.data = d && d.refresh ? d : null; }
     catch (e) { this.data = null; }
@@ -24,7 +31,7 @@ const Auth = {
     try {
       const r = await fetch('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: this.data.refresh }) });
-      if (r.status === 401) { this.clear(); return false; }
+      if (r.status === 401) { this.clear(); this._lost('Session ended - sign in again'); return false; }
       if (!r.ok) return this.accessValid();           // server hiccup: keep what we have
       const j = await r.json(), now = Date.now();
       this.data.access = j.access_token;
